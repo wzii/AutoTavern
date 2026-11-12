@@ -21,9 +21,12 @@ SYSTEM = (
     "Each turn you recruit (buy, play, sell, arrange minions, upgrade the Tavern), then your "
     "warband fights another player's automatically.\n\n" + R.RULES_PRIMER + """
 - Gold is refilled every turn (3 on turn 1, +1 per turn up to 10); unspent Gold is lost.
+- A bought card goes to your hand. Only minions in your warband fight: play a bought minion
+  (play hand k into a warband position) before ending the turn, or it does nothing.
 
 ## How to answer
-At each decision you get the state and the numbered legal actions. Reply with one JSON object:
+At each decision you get the state and the numbered legal actions. You have no tools here
+unless they are listed below: do not write tool calls. Reply with one JSON object:
 {"reasoning": "<short>", "actions": [<index>, ...], "notes": "<optional memo for later>"}
 - "actions" holds one or more indices, executed in order. Only the first is checked against
   the current list; each later index is read in the state after the earlier ones, so account
@@ -151,7 +154,55 @@ class Client:
         raise RuntimeError("rate limited")
 
 
+class ClaudeCLIClient:
+    """Claude through the Claude Code CLI (`claude -p`, signed in separately), as in
+    `run_claude`: the system prompt replaces Claude Code's, no tools, no project settings,
+    run from an empty directory. Function calling is not available (bare play only)."""
+
+    def __init__(self, a):
+        import tempfile
+        from pathlib import Path
+        self.model, self.effort, self.timeout = a.model, a.effort, int(a.read_timeout)
+        self.cwd = Path(tempfile.gettempdir()) / "tavernbench-neutral-cwd"
+        self.cwd.mkdir(exist_ok=True)
+
+    def chat(self, messages, tools=None):
+        import subprocess
+        from types import SimpleNamespace as NS
+        if tools:
+            raise RuntimeError("the claude-cli backend has no function calling")
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        prompt = "\n\n".join(m["content"] for m in messages if m["role"] != "system")
+        # No MCP servers either: the account's connectors would add their tool definitions
+        # (100k+ tokens) to every call. The prompt goes in on stdin (no argv length limit).
+        cmd = ["claude", "-p", "--model", self.model, "--system-prompt", system,
+               "--tools", "", "--effort", self.effort, "--output-format", "json",
+               "--setting-sources", "", "--strict-mcp-config", "--mcp-config",
+               '{"mcpServers": {}}']
+        for attempt in range(3):
+            try:
+                out = subprocess.run(cmd, check=False, cwd=self.cwd, input=prompt,
+                                     capture_output=True, text=True, timeout=self.timeout)
+                raw = out.stdout.strip()
+                data = json.loads(raw[raw.find("{"):]) if "{" in raw else {}
+            except (subprocess.TimeoutExpired, json.JSONDecodeError):
+                data = {"is_error": True}
+            if not data.get("is_error") and data.get("result") is not None:
+                break
+            time.sleep(5 * (attempt + 1))
+        else:
+            raise RuntimeError("claude -p failed")
+        u = data.get("usage") or {}
+        tin = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                          "cache_creation_input_tokens"))
+        return NS(choices=[NS(message=NS(content=data["result"], tool_calls=None),
+                              finish_reason=data.get("stop_reason"))],
+                  usage=NS(prompt_tokens=tin, completion_tokens=u.get("output_tokens") or 0),
+                  cost_usd=data.get("total_cost_usd") or 0.0)
+
+
 def _usage(r, info):
+    info["cost_usd"] = info.get("cost_usd", 0.0) + (getattr(r, "cost_usd", 0.0) or 0.0)
     if getattr(r, "usage", None):
         info["input_tokens"] = info.get("input_tokens", 0) + (r.usage.prompt_tokens or 0)
         info["output_tokens"] = info.get("output_tokens", 0) + (r.usage.completion_tokens or 0)

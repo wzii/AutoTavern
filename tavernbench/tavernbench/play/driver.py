@@ -55,7 +55,7 @@ class Match:
         self.trace = trace  # a callable taking one dict per decision, or None
         self.stats = {"decisions": 0, "actions": 0, "illegal": 0, "fallbacks": 0,
                       "forced_ends": 0, "input_tokens": 0, "output_tokens": 0,
-                      "tool_calls": 0, "errors": 0}
+                      "tool_calls": 0, "errors": 0, "cost_usd": 0.0}
         self._feedback = ""  # an illegal action that cut the last plan short
 
     def _decision(self, g, turn_log, feedback, notes) -> Decision:
@@ -84,6 +84,8 @@ class Match:
             self.stats["decisions"] += 1
             for k in ("input_tokens", "output_tokens", "tool_calls"):
                 self.stats[k] += int(plan.info.get(k, 0) or 0)
+            self.stats["cost_usd"] = round(self.stats["cost_usd"]
+                                           + float(plan.info.get("cost_usd", 0) or 0), 4)
             if plan.notes is not None:
                 notes[0] = plan.notes[:2000]
             rec = {"turn": g.turn, "phase": d.view["phase"], "attempt": attempt,

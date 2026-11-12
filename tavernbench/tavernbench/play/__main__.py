@@ -3,6 +3,8 @@
     python -m tavernbench.play --agent llm   --model MODEL --seeds 0-19 --out runs/MODEL
     python -m tavernbench.play --agent tools --model MODEL --seeds 0-19 --out runs/MODEL-tools \
         [--base-url URL] [--key-env OPENAI_API_KEY | --env FILE] [--extra '{...}'] [--jobs 4]
+    python -m tavernbench.play --agent llm --backend claude-cli --model sonnet --seeds 0-2 \
+        --out runs/sonnet          (through the signed-in Claude Code CLI; no tools)
     python -m tavernbench.play --agent bot|random --seeds 0-99 --out runs/bot
 
 Writes `games.jsonl` (one row per game: placement, turns, decisions, illegal actions,
@@ -47,6 +49,10 @@ def make_agent(a, seed):
         return AG.BotAgent()
     if a.agent == "random":
         return AG.RandomAgent(seed)
+    if a.backend == "claude-cli":
+        if a.agent == "tools":
+            raise SystemExit("--backend claude-cli supports --agent llm only")
+        return AG.LLMAgent(AG.ClaudeCLIClient(a))
     client = AG.Client(a)
     if a.agent == "llm":
         return AG.LLMAgent(client)
@@ -57,6 +63,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--agent", choices=["llm", "tools", "bot", "random"], default="llm")
     ap.add_argument("--model", default="")
+    ap.add_argument("--backend", choices=["openai", "claude-cli"], default="openai",
+                    help="claude-cli: Claude through the signed-in Claude Code CLI")
+    ap.add_argument("--effort", default="low", help="claude-cli effort level")
     ap.add_argument("--out", required=True)
     ap.add_argument("--seeds", default="0-9")
     ap.add_argument("--seat", type=int, default=0)
@@ -101,7 +110,7 @@ def main():
             fg.write(json.dumps(row) + "\n")
         print(f"seed {seed}: place {row['placement']} turns {row['turns']} "
               f"decisions {row['decisions']} illegal {row['illegal']} "
-              f"fallbacks {row['fallbacks']} {row['seconds']}s", flush=True)
+              f"fallbacks {row['fallbacks']} {row['seconds']}s ${row['cost_usd']}", flush=True)
         return row
 
     with cf.ThreadPoolExecutor(max(1, a.jobs)) as ex:

@@ -87,10 +87,14 @@ def listing(g, p: int, v: dict) -> tuple[list[int], str]:
     n, board = len(me["hand"]), len(me["board"])
     if any(BUY <= a < SELL for a in acts) and n < min(10, me.get("hand_limit", 10)) \
             and board < N_BOARD:
-        lines.append("After a buy in the same plan (not legal on their own):")
-        lines += [f"[{PLAY + n * N_POS + p}] play the card you bought into warband position "
-                  f"{p}" + (" (a spell: use this one)" if p == 0 else "")
-                  for p in range(board + 1)]
-        if n + 1 < 10:
-            lines.append(f"  (a second card bought in the plan: add {N_POS} to these)")
+        prices = [me["shop"][a - BUY].get("price") or 0 for a in acts
+                  if BUY <= a < SELL and a - BUY < len(me["shop"])]
+        two = n + 1 < 10 and board + 1 < N_BOARD and len(prices) > 1 \
+            and sum(sorted(prices)[:2]) <= me.get("gold", 0)
+        for k, which in enumerate(["first", "second"][:2 if two else 1]):
+            lines.append(f"After buying in the same plan, the {which} card you buy "
+                         "(not legal on their own):")
+            lines += [f"[{PLAY + (n + k) * N_POS + p}] play the {which} card you buy into "
+                      f"warband position {p}" + (" (a spell: use this one)" if p == 0 else "")
+                      for p in range(board + 1 + k)]
     return acts, "\n".join(lines)

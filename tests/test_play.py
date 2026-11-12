@@ -173,7 +173,7 @@ def test_buy_then_play_in_one_plan():
     i = next(i for i, c in enumerate(me["shop"]) if c.get("type") == "minion")
     n, b = len(me["hand"]), len(me["board"])
     _, text = A.listing(g, 0, v)
-    assert f"[{A.PLAY + n * A.N_POS + b}] play the card you bought" in text
+    assert f"[{A.PLAY + n * A.N_POS + b}] play the first card you buy into warband position {b}" in text
     m = Match(AG.BotAgent(), seed=0)
     done, stop = m._execute(g, [A.BUY + i, A.PLAY + n * A.N_POS + b], [])
     assert done == 2 and len(V.public_view(g, 0)["me"]["board"]) == b + 1, stop

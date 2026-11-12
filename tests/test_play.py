@@ -114,3 +114,66 @@ def test_end_guard_asks_before_ending_with_minions_in_hand():
     # the second End Turn of that turn goes through
     t = held[0]["turn"]
     assert any(r["turn"] == t and r["plan"] == [A.END] and r["executed"] == 1 for r in recs)
+
+
+def test_warband_and_seen_minions_render_with_stats():
+    g = _recruit_game(seed=3, turn=6)
+    v = V.public_view(g, 0)
+    text = V.render(v)
+    for m in v["me"]["board"]:
+        assert f"{m['name']} (" in text and f"{m['atk']}/{m['hp']}" in text
+    seen = [m for o in v["opponents"] for m in o.get("seen_board") or []]
+    assert v["me"]["board"] and seen
+    for c in v["me"]["board"] + seen:
+        assert V.is_minion(c)
+        assert "(spell" not in V.card(c)
+
+
+def _game_with(cond, seed=3, max_turn=12):
+    """A copy of a bot game at the first decision of seat 0 that satisfies `cond(view)`."""
+    g = taverngym.Game(seed=seed)
+    while not g.is_over() and g.turn <= max_turn:
+        if g.needs_action(0) and cond(V.public_view(g, 0)):
+            return g
+        for p in range(8):
+            if g.needs_action(p):
+                g.step(p, g.bot_action(p))
+    return None
+
+
+def test_plan_indices_follow_cards():
+    # Play a hand minion at the far left, then sell "warband 0" as listed before the play:
+    # the minion that was leftmost is sold, not the one just played.
+    def ok(v):
+        me = v["me"]
+        return v["phase"] == "recruit" and not me.get("pending") and 1 <= len(me["board"]) < 7 \
+            and any(c.get("type") == "minion" for c in me["hand"])
+    g = _game_with(ok)
+    assert g is not None
+    me = V.public_view(g, 0)["me"]
+    h = next(i for i, c in enumerate(me["hand"]) if c.get("type") == "minion")
+    first = me["board"][0]["eid"]
+    played = me["hand"][h]["eid"]
+    m = Match(AG.BotAgent(), seed=0)
+    done, stop = m._execute(g, [A.PLAY + h * A.N_POS, A.SELL], [])
+    after = [c["eid"] for c in V.public_view(g, 0)["me"]["board"]]
+    assert done == 2 and first not in after and played in after, stop
+
+
+def test_buy_then_play_in_one_plan():
+    def ok(v):
+        me = v["me"]
+        return v["phase"] == "recruit" and not me.get("pending") and me["gold"] >= 3 \
+            and len(me["board"]) < 7 and len(me["hand"]) < 9 \
+            and any(c.get("type") == "minion" for c in me["shop"])
+    g = _game_with(ok)
+    assert g is not None
+    v = V.public_view(g, 0)
+    me = v["me"]
+    i = next(i for i, c in enumerate(me["shop"]) if c.get("type") == "minion")
+    n, b = len(me["hand"]), len(me["board"])
+    _, text = A.listing(g, 0, v)
+    assert f"[{A.PLAY + n * A.N_POS + b}] play the card you bought" in text
+    m = Match(AG.BotAgent(), seed=0)
+    done, stop = m._execute(g, [A.BUY + i, A.PLAY + n * A.N_POS + b], [])
+    assert done == 2 and len(V.public_view(g, 0)["me"]["board"]) == b + 1, stop

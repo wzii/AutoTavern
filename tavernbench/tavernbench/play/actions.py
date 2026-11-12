@@ -81,4 +81,16 @@ def listing(g, p: int, v: dict) -> tuple[list[int], str]:
                     and PLAY + h * N_POS in acts:
                 continue
         keep.append(a)
-    return acts, "\n".join(f"[{a}] {describe(a, v)}" for a in keep)
+    lines = [f"[{a}] {describe(a, v)}" for a in keep]
+    # A card bought in this plan joins the hand at position len(hand): its play actions are
+    # not legal yet, so they are listed apart (the driver follows cards through a plan).
+    n, board = len(me["hand"]), len(me["board"])
+    if any(BUY <= a < SELL for a in acts) and n < min(10, me.get("hand_limit", 10)) \
+            and board < N_BOARD:
+        lines.append("After a buy in the same plan (not legal on their own):")
+        lines += [f"[{PLAY + n * N_POS + p}] play the card you bought into warband position "
+                  f"{p}" + (" (a spell: use this one)" if p == 0 else "")
+                  for p in range(board + 1)]
+        if n + 1 < 10:
+            lines.append(f"  (a second card bought in the plan: add {N_POS} to these)")
+    return acts, "\n".join(lines)

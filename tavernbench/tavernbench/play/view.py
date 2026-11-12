@@ -58,10 +58,18 @@ def _text(c: dict) -> str:
     return " ".join((t or c.get("text") or "").split())
 
 
+def is_minion(c: dict) -> bool:
+    """Hand, Tavern and Discover items carry `type`; warband minions (`minion_json`) carry an
+    entity id and no type; static cards (trinkets, heroes, Hero Powers) carry `kind`."""
+    if c.get("type"):
+        return c["type"] == "minion"
+    return "eid" in c or c.get("kind") == "minion"
+
+
 def card(c: dict, i: int | None = None, price=False) -> str:
     """One card on a line: name, tribe, tier, stats, keywords, text."""
     head = f"{i}. " if i is not None else ""
-    if c.get("type", "minion" if c.get("kind") == "minion" else None) != "minion":
+    if not is_minion(c):
         cost = c["price"] if price and c.get("price") is not None else c.get("cost")
         label = KIND.get(c.get("kind"), "spell")
         s = f"{head}{c.get('name', '?')} ({label}" + (f", cost {cost}" if cost is not None else "") + ")"

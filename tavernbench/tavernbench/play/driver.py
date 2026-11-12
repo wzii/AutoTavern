@@ -42,51 +42,129 @@ class Plan:
     info: dict = field(default_factory=dict)  # tokens, tool calls, raw text... (logged)
 
 
-def unplayed(g, seat: int, v: dict) -> list[str]:
-    """Minions in hand that could be played into the warband now."""
+def unplayed(g, seat: int, v: dict) -> list[tuple[str, str]]:
+    """Minions in hand that could be played into the warband now: (key, text) pairs."""
     me = v["me"]
     if len(me["board"]) >= 7:
         return []
     legal = set(A.legal(g, seat))
-    return [f"hand {h}: {c.get('name', '?')}" for h, c in enumerate(me["hand"])
-            if c.get("type") == "minion"
+    return [(f"play:{c.get('hid')}", f"hand {h}: {c.get('name', '?')}")
+            for h, c in enumerate(me["hand"]) if c.get("type") == "minion"
             and any(A.PLAY + h * A.N_POS + p in legal for p in range(A.N_POS))]
 
 
-def unspent(g, seat: int, v: dict) -> str:
-    """What the seat's remaining Gold could still do this turn ("" if nothing)."""
+def unspent(g, seat: int, v: dict) -> list[tuple[str, str]]:
+    """What the seat's remaining Gold could still do this turn: (key, text) pairs."""
     me = v["me"]
     if me["gold"] <= 0:
-        return ""
+        return []
     legal = set(A.legal(g, seat))
     can = []
-    if any(A.BUY <= a < A.SELL for a in legal):
-        can.append("buy")
+    buys = [me["shop"][a - A.BUY] for a in sorted(legal) if A.BUY <= a < A.SELL
+            and a - A.BUY < len(me["shop"])]
+    if buys:
+        can.append(("buy", "buy (" + ", ".join(f"{c.get('name')} {c.get('price')}"
+                                               for c in buys[:4]) + ")"))
+    for a in sorted(legal):
+        if A.ACTIVATE <= a < A.CHOOSE and a - A.ACTIVATE < len(me["board"]):
+            m = me["board"][a - A.ACTIVATE]
+            text = f"activate {m.get('name')} ({m.get('activate_cost', '?')})"
+            can.append((f"activate:{m.get('eid')}", text))
     if A.UPGRADE in legal:
-        can.append(f"upgrade the Tavern ({me.get('upgrade_price')})")
-    if any(a in legal for a in (A.HERO_POWER, A.HERO_POWER + 1)) and any(
-            h.get("usable") and not h.get("passive") and (h.get("price") or 0) > 0
-            for h in me.get("hero_powers") or []):
-        can.append("use the Hero Power")
+        can.append(("upgrade", f"upgrade the Tavern ({me.get('upgrade_price')})"))
+    for h in me.get("hero_powers") or []:
+        if A.HERO_POWER + h.get("slot", 0) in legal and h.get("usable") \
+                and not h.get("passive") and (h.get("price") or 0) > 0:
+            can.append((f"power:{h.get('slot', 0)}", f"use {h.get('name')} ({h.get('price')})"))
     if A.DARK_GIFT in legal:
-        can.append("take a Dark Gift")
-    if A.REFRESH in legal and not can:
-        can.append("refresh")
-    return f"you still have {me['gold']} Gold that could " + " or ".join(can) if can else ""
+        can.append(("dark_gift", "take a Dark Gift"))
+    if A.REFRESH in legal:
+        can.append(("refresh", f"refresh ({me.get('refresh_price')})"))
+    return can
 
 
-def end_check(g, seat: int, v: dict) -> list[str]:
-    """Reasons to ask before ending the turn: minions left in hand, Gold left to spend.
-    Unspent Gold is lost and minions in hand do not fight."""
+def end_check(g, seat: int, v: dict) -> list[tuple[str, str]]:
+    """Reasons to ask before ending the turn, as (key, text): minions left in hand, Gold
+    left to spend. Unspent Gold is lost and minions in hand do not fight."""
     out = []
     left = unplayed(g, seat, v)
     if left:
-        out.append("minions in hand could still be played (" + ", ".join(left)
-                   + "); only minions in the warband fight")
+        out.append(("|".join(k for k, _ in left), "minions in hand could still be played ("
+                    + ", ".join(t for _, t in left) + "); only minions in the warband fight"))
     gold = unspent(g, seat, v)
     if gold:
-        out.append(gold + " (unspent Gold is lost)")
+        out.append(("|".join(k for k, _ in gold), f"you still have {v['me']['gold']} Gold that "
+                    "could " + ", ".join(t for _, t in gold) + " (unspent Gold is lost)"))
     return out
+
+
+class Snapshot:
+    """The state a plan was written against: indices of later actions in the plan mean what
+    the listed actions meant then (`plans="snapshot"`), and the driver follows each card by
+    its identity as positions change. Hand positions past the end refer to the cards that join
+    the hand during the plan (the first card bought is hand position len(hand))."""
+
+    def __init__(self, me: dict):
+        self.board = [m.get("eid") for m in me["board"]]
+        self.hand = [h.get("hid") for h in me["hand"]]
+        self.shop = [s.get("sid") for s in me["shop"]]
+        self.spell = [h.get("type") == "spell" for h in me["hand"]]
+        self.added: list = []  # hand ids that joined the hand during the plan, in order
+
+    def note_hand(self, me: dict):
+        for h in me["hand"]:
+            if h.get("hid") not in self.hand and h.get("hid") not in self.added:
+                self.added.append(h.get("hid"))
+
+    def remap(self, a: int, me: dict) -> int | None:
+        """`a` as written against the snapshot, as an index in the state `me` (None when the
+        card it names is gone)."""
+        board = [m.get("eid") for m in me["board"]]
+        hand = [h.get("hid") for h in me["hand"]]
+        shop = [s.get("sid") for s in me["shop"]]
+
+        def at(lst, x):
+            return lst.index(x) if x is not None and x in lst else None
+
+        def hand_now(h):
+            if h < len(self.hand):
+                return at(hand, self.hand[h])
+            k = h - len(self.hand)
+            return at(hand, self.added[k]) if k < len(self.added) else None
+
+        def slot(p):  # a warband position: before the minion that was there, else the end
+            if p < len(self.board):
+                return at(board, self.board[p])
+            return len(board)
+
+        if a < A.BUY or A.CHOOSE <= a < A.PLAY:
+            return a
+        if a < A.SELL:
+            i = a - A.BUY
+            j = at(shop, self.shop[i]) if i < len(self.shop) else None
+            return None if j is None else A.BUY + j
+        if a < A.CHOOSE:
+            base = A.SELL if a < A.ACTIVATE else A.ACTIVATE
+            i = a - base
+            j = at(board, self.board[i]) if i < len(self.board) else None
+            return None if j is None else base + j
+        if a < A.MAGNETIZE:
+            h, p = divmod(a - A.PLAY, A.N_POS)
+            hh = hand_now(h)
+            if hh is None:
+                return None
+            spell = me["hand"][hh].get("type") == "spell"
+            pp = p if spell else slot(p)
+            return None if pp is None else A.PLAY + hh * A.N_POS + pp
+        if a < A.MOVE:
+            h, j = divmod(a - A.MAGNETIZE, A.N_BOARD)
+            hh = hand_now(h)
+            jj = at(board, self.board[j]) if j < len(self.board) else None
+            return None if hh is None or jj is None else A.MAGNETIZE + hh * A.N_BOARD + jj
+        i, j = divmod(a - A.MOVE, A.N_BOARD)
+        ii = at(board, self.board[i]) if i < len(self.board) else None
+        jj = at(board, self.board[j]) if j < len(self.board) else len(board) - 1
+        return None if ii is None or jj is None else A.MOVE + ii * A.N_BOARD + jj
 
 
 def _ids(me: dict) -> tuple[set, set]:
@@ -96,7 +174,7 @@ def _ids(me: dict) -> tuple[set, set]:
 class Match:
     def __init__(self, agent, seed: int, seat: int = 0, config: dict | None = None,
                  turn_cap: int = 40, retries: int = 2, max_plan: int = 10, trace=None,
-                 record_combats=False, end_guard=True):
+                 record_combats=False, end_guard=True, plans="snapshot"):
         self.agent, self.seed, self.seat = agent, seed, seat
         self.config_json = json.dumps(config) if config else None
         self.turn_cap, self.retries, self.max_plan = turn_cap, retries, max_plan
@@ -106,8 +184,14 @@ class Match:
                       "tool_calls": 0, "errors": 0, "cost_usd": 0.0}
         self._feedback = ""  # an illegal action that cut the last plan short
         self.record_combats = record_combats
-        self.end_guard = end_guard  # hold the first End Turn of a turn with minions left to play
-        self._guard_turn = -1
+        # Ask before End Turn with minions left to play or Gold left to spend: True asks again
+        # whenever a new reason appears in the turn, "once" (earlier runs) once per turn.
+        self.end_guard = end_guard
+        self._guard_turn, self._guard_seen = -1, set()  # reasons already put to the agent
+        # "snapshot": every index of a plan means what the listed actions meant when the agent
+        # wrote it; "sequential" (runs before this option): later indices are read in the
+        # state after the earlier actions.
+        self.plans = plans
         self.combats: list[dict] = []  # the agent's combats with replay frames (if recorded)
         self.game = None
 
@@ -166,23 +250,35 @@ class Match:
         done = 0
         if not plan:
             return 0, "the plan was empty or could not be read"
-        for a in plan:
+        snap = Snapshot(V.public_view(g, self.seat)["me"]) if self.plans == "snapshot" else None
+        for k, a in enumerate(plan):
             if not g.needs_action(self.seat):
                 return done, ""
             v = V.public_view(g, self.seat)
+            me = v["me"]
             legal = A.legal(g, self.seat)
+            written = a
+            if snap is not None and isinstance(a, int) and k > 0:
+                snap.note_hand(me)
+                a = snap.remap(a, me)
             if not isinstance(a, int) or a not in legal:
                 self.stats["illegal"] += 1
-                return done, (f"action {a} is not legal in the current state; choose from the "
-                              "listed actions")
-            me = v["me"]
-            if a == A.END and self.end_guard and self._guard_turn != g.turn:
-                why = end_check(g, self.seat, v)
+                what = f"action {written}" + (f" (number {k + 1} of your list)" if k else "")
+                return done, (f"{what} is not legal at that point; choose from the listed "
+                              "actions")
+            if a == A.END and self.end_guard:
+                if self._guard_turn != g.turn:
+                    self._guard_turn, self._guard_seen = g.turn, set()
+                elif self.end_guard == "once":  # runs before "ask again on a new reason"
+                    self._guard_seen.add("*")
+                why = [] if "*" in self._guard_seen else [
+                    (key, text) for key, text in end_check(g, self.seat, v)
+                    if key not in self._guard_seen]
                 if why:
-                    self._guard_turn = g.turn
-                    return done, ("you tried to end the turn, but " + "; and ".join(why)
-                                  + ". Use the listed actions, or send 0 again to end the turn "
-                                  "anyway")
+                    self._guard_seen |= {key for key, _ in why}
+                    return done, ("you tried to end the turn, but " + "; and ".join(
+                        t for _, t in why) + ". Use the listed actions, or send 0 again to "
+                        "end the turn anyway")
             hand0, shop0 = _ids(me)
             desc = A.describe(a, v)
             g.step(self.seat, a)
@@ -245,4 +341,5 @@ class Match:
                 "seconds": round(time.time() - t0, 1), **self.stats,
                 "settings": {"turn_cap": self.turn_cap, "retries": self.retries,
                              "max_plan": self.max_plan, "end_guard": self.end_guard,
+                             "plans": self.plans,
                              "config": json.loads(self.config_json or "null")}}

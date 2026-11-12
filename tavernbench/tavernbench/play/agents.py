@@ -28,10 +28,10 @@ SYSTEM = (
 At each decision you get the state and the numbered legal actions. You have no tools here
 unless they are listed below: do not write tool calls. Reply with one JSON object:
 {"reasoning": "<short>", "actions": [<index>, ...], "notes": "<optional memo for later>"}
-- "actions" holds one or more indices, executed in order. Only the first is checked against
-  the current list; each later index is read in the state after the earlier ones, so account
-  for shifts: a bought card goes to the right end of your hand and the Tavern cards to its
-  right move left; playing or selling shifts the cards to the right of it left.
+- "actions" holds one or more indices from the list, executed in order. Every index means
+  what the list says now, even after earlier actions move cards around (the game follows
+  each card), so never adjust indices for earlier actions. To buy a card and play it in the
+  same plan, use the "after a buy" entries, e.g. [buy, play the card you bought, 0].
 - Your plan stops and you are asked again after anything that reveals new cards (refresh,
   Discover, a pending choice, a generated card), or at an illegal index.
 - Finish the turn with action 0 (end turn). Minion order matters in combat: leftmost
@@ -308,9 +308,18 @@ def reseeded_copy(g, salt: int):
 
 
 def apply_plan(g, seat, plan) -> str | None:
-    for k, a in enumerate(plan):
+    """Apply a plan as the driver reads it: every index means what the list meant when the
+    plan was written (cards are followed by identity)."""
+    from .driver import Snapshot
+    snap = Snapshot(V.public_view(g, seat)["me"])
+    for k, written in enumerate(plan):
+        a = written
+        if k and isinstance(a, int):
+            me = V.public_view(g, seat)["me"]
+            snap.note_hand(me)
+            a = snap.remap(a, me)
         if not isinstance(a, int) or a not in A.legal(g, seat):
-            return f"action {a} (number {k + 1} of the list) is not legal at that point"
+            return f"action {written} (number {k + 1} of the list) is not legal at that point"
         g.step(seat, a)
         if not g.needs_action(seat):
             return None

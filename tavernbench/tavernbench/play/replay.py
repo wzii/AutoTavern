@@ -91,10 +91,13 @@ def rebuild(run: Path, seed: int) -> dict:
     recs = _jsonl(run / "traces" / f"{seed}.jsonl")
     st = row.get("settings") or {}
     agent = ReplayAgent(recs)
+    guard = st.get("end_guard", False)
+    if guard is True and "plans" not in st:  # recorded before the check asked again
+        guard = "once"
     replayed = []
     m = Match(agent, seed, row.get("seat", 0), st.get("config"), st.get("turn_cap", 40),
               st.get("retries", 2), st.get("max_plan", 10), replayed.append,
-              record_combats=True, end_guard=st.get("end_guard", False))
+              record_combats=True, end_guard=guard, plans=st.get("plans", "sequential"))
     out = m.play()
     keys = ("placement", "actions", "illegal", "fallbacks", "health", "turns")
     verified = all(out.get(k) == row.get(k) for k in keys if k in row) \

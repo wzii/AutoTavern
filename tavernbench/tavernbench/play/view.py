@@ -222,12 +222,15 @@ def render(v: dict, combats: list[dict] | None = None) -> str:
         if me.get("next_is_ghost"):
             lines.append("  Your next opponent is a ghost of an eliminated player.")
     for c in combats or []:
-        other = c["b"] if c["a"] == seat else c["a"]
-        if c.get("winner") is None:
+        # `winner` is a side: 0 = a won, 1 = b won, 2 = tie (b is None against a ghost).
+        side = 0 if c["a"] == seat else 1
+        other = c["b"] if side == 0 else c["a"]
+        other = "a ghost" if other is None else f"player {other}"
+        if c.get("winner") == 2:
             res = "tie"
-        elif c["winner"] == seat:
+        elif c.get("winner") == side:
             res = f"you won and dealt {c.get('damage')} damage"
         else:
             res = f"you lost and took {c.get('damage')} damage"
-        lines.append(f"Last combat (turn {c.get('turn')}) against player {other}: {res}.")
+        lines.append(f"Last combat (turn {c.get('turn')}) against {other}: {res}.")
     return "\n".join(lines)

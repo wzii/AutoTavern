@@ -42,13 +42,61 @@ class Plan:
     info: dict = field(default_factory=dict)  # tokens, tool calls, raw text... (logged)
 
 
+def unplayed(g, seat: int, v: dict) -> list[str]:
+    """Minions in hand that could be played into the warband now."""
+    me = v["me"]
+    if len(me["board"]) >= 7:
+        return []
+    legal = set(A.legal(g, seat))
+    return [f"hand {h}: {c.get('name', '?')}" for h, c in enumerate(me["hand"])
+            if c.get("type") == "minion"
+            and any(A.PLAY + h * A.N_POS + p in legal for p in range(A.N_POS))]
+
+
+def unspent(g, seat: int, v: dict) -> str:
+    """What the seat's remaining Gold could still do this turn ("" if nothing)."""
+    me = v["me"]
+    if me["gold"] <= 0:
+        return ""
+    legal = set(A.legal(g, seat))
+    can = []
+    if any(A.BUY <= a < A.SELL for a in legal):
+        can.append("buy")
+    if A.UPGRADE in legal:
+        can.append(f"upgrade the Tavern ({me.get('upgrade_price')})")
+    if any(a in legal for a in (A.HERO_POWER, A.HERO_POWER + 1)) and any(
+            h.get("usable") and not h.get("passive") and (h.get("price") or 0) > 0
+            for h in me.get("hero_powers") or []):
+        can.append("use the Hero Power")
+    if A.DARK_GIFT in legal:
+        can.append("take a Dark Gift")
+    if A.REFRESH in legal and not can:
+        can.append("refresh")
+    return f"you still have {me['gold']} Gold that could " + " or ".join(can) if can else ""
+
+
+def end_check(g, seat: int, v: dict) -> list[str]:
+    """Reasons to ask before ending the turn: minions left in hand, Gold left to spend.
+    Unspent Gold is lost and minions in hand do not fight."""
+    out = []
+    left = unplayed(g, seat, v)
+    if left:
+        out.append("minions in hand could still be played (" + ", ".join(left)
+                   + "); only minions in the warband fight")
+    gold = unspent(g, seat, v)
+    if gold:
+        out.append(gold + " (unspent Gold is lost)")
+    return out
+
+
 def _ids(me: dict) -> tuple[set, set]:
     return ({c.get("hid") for c in me["hand"]}, {c.get("sid") for c in me["shop"]})
 
 
 class Match:
     def __init__(self, agent, seed: int, seat: int = 0, config: dict | None = None,
-                 turn_cap: int = 40, retries: int = 2, max_plan: int = 10, trace=None):
+                 turn_cap: int = 40, retries: int = 2, max_plan: int = 10, trace=None,
+                 record_combats=False, end_guard=True):
         self.agent, self.seed, self.seat = agent, seed, seat
         self.config_json = json.dumps(config) if config else None
         self.turn_cap, self.retries, self.max_plan = turn_cap, retries, max_plan
@@ -57,6 +105,11 @@ class Match:
                       "forced_ends": 0, "input_tokens": 0, "output_tokens": 0,
                       "tool_calls": 0, "errors": 0, "cost_usd": 0.0}
         self._feedback = ""  # an illegal action that cut the last plan short
+        self.record_combats = record_combats
+        self.end_guard = end_guard  # hold the first End Turn of a turn with minions left to play
+        self._guard_turn = -1
+        self.combats: list[dict] = []  # the agent's combats with replay frames (if recorded)
+        self.game = None
 
     def _decision(self, g, turn_log, feedback, notes) -> Decision:
         v = V.public_view(g, self.seat)
@@ -88,15 +141,18 @@ class Match:
                                            + float(plan.info.get("cost_usd", 0) or 0), 4)
             if plan.notes is not None:
                 notes[0] = plan.notes[:2000]
-            rec = {"turn": g.turn, "phase": d.view["phase"], "attempt": attempt,
-                   "plan": plan.actions, "info": plan.info, "latency_s": round(time.time() - t0,
-                                                                              2)}
+            rec = {"seat": self.seat, "turn": g.turn, "phase": d.view["phase"],
+                   "attempt": attempt, "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                   "state": d.state_text, "feedback": d.feedback, "plan": plan.actions,
+                   "notes": plan.notes, "info": plan.info,
+                   "latency_s": round(time.time() - t0, 2)}
+            n0 = len(turn_log)
             done, feedback = self._execute(g, plan.actions[:self.max_plan], turn_log)
-            rec["executed"], rec["stop"] = done, feedback
+            rec["executed"], rec["stop"], rec["did"] = done, feedback, turn_log[n0:]
             if self.trace:
                 self.trace(rec)
             if done:
-                self._feedback = feedback if feedback.startswith("action") else ""
+                self._feedback = feedback  # told to the agent at its next decision
                 return
             if not plan.actions and "error" in plan.info:
                 break
@@ -120,6 +176,13 @@ class Match:
                 return done, (f"action {a} is not legal in the current state; choose from the "
                               "listed actions")
             me = v["me"]
+            if a == A.END and self.end_guard and self._guard_turn != g.turn:
+                why = end_check(g, self.seat, v)
+                if why:
+                    self._guard_turn = g.turn
+                    return done, ("you tried to end the turn, but " + "; and ".join(why)
+                                  + ". Use the listed actions, or send 0 again to end the turn "
+                                  "anyway")
             hand0, shop0 = _ids(me)
             desc = A.describe(a, v)
             g.step(self.seat, a)
@@ -138,12 +201,25 @@ class Match:
                 return done, "new cards were revealed"
         return done, ""
 
+    def _keep_combats(self, g):
+        """Store the agent's combats of the last round (with frames) not stored yet."""
+        for c in json.loads(g.public_view(self.seat, True)).get("combats", []):
+            key = (c["turn"], c["a"], c["b"])
+            if self.seat in (c["a"], c["b"]) and key not in {
+                    (x["turn"], x["a"], x["b"]) for x in self.combats}:
+                self.combats.append(c)
+
     def play(self) -> dict:
-        g = _core.Game(self.seed, self.config_json)
+        g = self.game = _core.Game(self.seed, self.config_json)
+        if self.record_combats:
+            g.set_record_log(True)
         notes = [""]
-        turn, turn_log, turn_actions, last_turn = -1, [], 0, 0
+        turn, turn_log, turn_actions, last_turn, seen = -1, [], 0, 0, 0
         t0 = time.time()
         for _ in range(200000):
+            if self.record_combats and g.turn != seen:  # a round was fought
+                self._keep_combats(g)
+            seen = g.turn
             if g.is_over():
                 break
             for p in range(g.num_players):
@@ -161,7 +237,12 @@ class Match:
                 g.step(self.seat, A.END if A.END in legal else self._fallback(g))
                 continue
             self._agent_turn(g, turn_log, notes)
+        if self.record_combats:
+            self._keep_combats(g)
         place = list(g.placements())[self.seat]
         return {"seed": self.seed, "seat": self.seat, "placement": int(place),
                 "turns": last_turn, "game_turns": g.turn, "health": list(g.health())[self.seat],
-                "seconds": round(time.time() - t0, 1), **self.stats}
+                "seconds": round(time.time() - t0, 1), **self.stats,
+                "settings": {"turn_cap": self.turn_cap, "retries": self.retries,
+                             "max_plan": self.max_plan, "end_guard": self.end_guard,
+                             "config": json.loads(self.config_json or "null")}}

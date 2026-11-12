@@ -25,12 +25,15 @@ python -m tavernbench.play --agent random --seeds 0-99 --out runs/random
 ```
 
 The key and gateway options follow `run_openai`. Any OpenAI-compatible chat endpoint works.
-Pass model-specific request fields with `--extra '{...}'`. The output is:
+Pass model-specific request fields with `--extra '{...}'`. With `--backend claude-cli
+--model sonnet`, Claude is called through the signed-in Claude Code CLI instead (bare play
+only; no MCP servers are loaded, which would otherwise add 100k+ tokens to every call). The
+output is:
 
 - `games.jsonl`: one row per game. It holds the placement, the agent's last turn, decisions,
   actions, illegal actions, fallbacks to the bot, turns ended by the cap, tokens and tool calls.
-- `traces/<seed>.jsonl`: one row per decision. It holds the plan, how much of it ran and why it
-  stopped, the reply and the tool calls.
+- `traces/<seed>.jsonl`: one row per decision, in the record format below.
+- `run.json`: what every decision shares: the system prompt, the model and the settings.
 
 A run can be resumed: seeds already in `games.jsonl` are skipped. The run ends with the mean
 placement and the top-4 and first-place rates. A scripted bot against seven bots places 4.5 on
@@ -61,6 +64,10 @@ The driver executes the listed actions in order. It asks the model again when on
 happens:
 
 - an action is illegal (the model is told which one);
+- it ends the turn while a minion in hand could still be played, or while Gold could still
+  buy, upgrade or use the Hero Power (asked once per turn; a second `0` ends it). A model that
+  writes "buy X and play it" often sends `[buy, 0]`, since the play action of a card not yet
+  in hand is not in the list it sees;
 - an action reveals something new: a refresh, a Hero Power, a Dark Gift, a pending choice
   (Discover, target, Choose One, trinket), or a card that was not bought appearing in hand or
   in the Tavern;
@@ -83,6 +90,59 @@ Before it answers, the model may call two tools, at most `--calls` times per dec
 
 Tools run on copies with fresh random numbers. A refresh or Discover inside a tool shows a
 possible outcome, not the real one, so the model cannot look ahead.
+
+## Step records
+
+Every decision is stored with what went in and what came out, in the same format for batch
+runs (`traces/<seed>.jsonl`) and the browser lobby (`history.jsonl`):
+
+| field | content |
+| :--- | :--- |
+| `seat`, `turn`, `phase`, `time` | where and when |
+| `state` | the visible state as text, as the model saw it |
+| `feedback` | what the driver told the model first (an illegal action, the end-of-turn check) |
+| `plan`, `did`, `stop` | the action indices it sent, what was executed, and why the plan stopped |
+| `notes` | the memo it kept for later turns |
+| `prompt`, `response` | the full user prompt and the raw reply |
+| `reasoning` | the reply's `reasoning` field |
+| `thinking` | the model's thinking where the API returns it (`reasoning_content`); the Claude Code CLI returns thinking blocks without text, so it is empty there |
+| `tools` | tool calls with arguments and results (`--agent tools`) |
+| `cost_usd`, `input_tokens`, `output_tokens`, `latency_s` | cost |
+
+In a trace the fields from `prompt` on sit under `info`; the lobby's history flattens them.
+An agent of your own gets the same storage and display by putting them in the `info` of its
+`Plan` (`agents.record_reply(info, prompt, text, thinking)` fills the usual ones).
+
+## Replays
+
+```bash
+python -m tavernbench.play.replay --run runs/MODEL --seed 0      # -> runs/MODEL/replays/0.html
+```
+
+A game is determined by its seed and the agent's plans, so the replay plays the recorded plans
+again (no model is called), checks the result against the original game, and writes one
+self-contained page. It shows every turn: the state at each decision (Tavern, warband, hand,
+pending choice, lobby), the model's reasoning, raw reply, thinking and tool calls, the actions
+executed, and each combat step by step.
+
+## Playing against the models
+
+```bash
+python -m tavernbench.play.serve --humans 0 --llm 1,2 --backend claude-cli --model sonnet
+```
+
+This opens a lobby at http://localhost:8765/ with you in seat 0, the model in seats 1 and 2 and
+bots elsewhere (`--humans 0,1` for two people: each opens `/?seat=k`; `--host 0.0.0.0` for
+other machines; seats are not password-protected). Recruit turns run at the same time, as in
+the game: models think in the background, and combat starts when everyone has ended the turn.
+
+Click a Tavern card to buy it; click a hand card, then a gap in the warband to place it; click
+a warband minion to sell, activate or move it, or drag it. Choices (hero, Discover, trinkets,
+targets) open as a dialog, and the last combat replays on the right. Ending a turn with an
+unplayed minion or spendable Gold asks for a second click. The History panel lists your steps
+and, after the game, every model's steps with their full output (`--show-thoughts` shows them
+live; they can reveal what that player holds). The history is also written to
+`runs/lobby/<seed>-<time>/history.jsonl`.
 
 ## Writing your own agent
 

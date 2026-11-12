@@ -79,6 +79,18 @@ def parse_plan(text: str) -> tuple[list[int], str | None]:
     return [], None
 
 
+def parse_reasoning(text: str) -> str:
+    """The "reasoning" field of a reply, or "" if there is none."""
+    for m in reversed(list(re.finditer(r"\{.*\}", text or "", re.DOTALL))):
+        try:
+            d = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            continue
+        r = d.get("reasoning") if isinstance(d, dict) else None
+        return r if isinstance(r, str) else ""
+    return ""
+
+
 def user_prompt(d: Decision) -> str:
     parts = []
     if d.notes:
@@ -176,17 +188,27 @@ class ClaudeCLIClient:
         # No MCP servers either: the account's connectors would add their tool definitions
         # (100k+ tokens) to every call. The prompt goes in on stdin (no argv length limit).
         cmd = ["claude", "-p", "--model", self.model, "--system-prompt", system,
-               "--tools", "", "--effort", self.effort, "--output-format", "json",
-               "--setting-sources", "", "--strict-mcp-config", "--mcp-config",
+               "--tools", "", "--effort", self.effort, "--output-format", "stream-json",
+               "--verbose", "--setting-sources", "", "--strict-mcp-config", "--mcp-config",
                '{"mcpServers": {}}']
         for attempt in range(3):
             try:
                 out = subprocess.run(cmd, check=False, cwd=self.cwd, input=prompt,
                                      capture_output=True, text=True, timeout=self.timeout)
-                raw = out.stdout.strip()
-                data = json.loads(raw[raw.find("{"):]) if "{" in raw else {}
-            except (subprocess.TimeoutExpired, json.JSONDecodeError):
-                data = {"is_error": True}
+                data, thinking = {"is_error": True}, []
+                for line in out.stdout.splitlines():
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("type") == "assistant":
+                        thinking += [b.get("thinking") or "" for b in
+                                     (ev.get("message") or {}).get("content") or []
+                                     if b.get("type") == "thinking"]
+                    elif ev.get("type") == "result":
+                        data = ev
+            except subprocess.TimeoutExpired:
+                data, thinking = {"is_error": True}, []
             if not data.get("is_error") and data.get("result") is not None:
                 break
             time.sleep(5 * (attempt + 1))
@@ -195,10 +217,35 @@ class ClaudeCLIClient:
         u = data.get("usage") or {}
         tin = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
                                           "cache_creation_input_tokens"))
-        return NS(choices=[NS(message=NS(content=data["result"], tool_calls=None),
+        # Claude Code returns thinking blocks without their text (signature only); the text is
+        # kept when a model or version provides it.
+        text = "\n\n".join(t for t in thinking if t.strip())
+        return NS(choices=[NS(message=NS(content=data["result"], tool_calls=None,
+                                         reasoning_content=text or None),
                               finish_reason=data.get("stop_reason"))],
                   usage=NS(prompt_tokens=tin, completion_tokens=u.get("output_tokens") or 0),
                   cost_usd=data.get("total_cost_usd") or 0.0)
+
+
+def _thinking(msg) -> str:
+    """Thinking text a backend returned with a message (DeepSeek-style `reasoning_content`,
+    OpenRouter-style `reasoning`), or ""."""
+    for k in ("reasoning_content", "reasoning"):
+        t = getattr(msg, k, None)
+        if isinstance(t, str) and t.strip():
+            return t
+    return ""
+
+
+def record_reply(info: dict, prompt: str, text: str, thinking: str = ""):
+    """The fields every agent may fill in `Plan.info`; the trace, the replay page and the
+    lobby's history show them: the prompt it answered, its raw reply, its reasoning, and its
+    thinking where the model returns it."""
+    info["prompt"] = prompt
+    info["response"] = text or ""
+    info["reasoning"] = parse_reasoning(text)
+    if thinking:
+        info["thinking"] = (info.get("thinking", "") + "\n\n" + thinking).strip()
 
 
 def _usage(r, info):
@@ -220,10 +267,10 @@ class LLMAgent:
         info = {}
         r = self.client.chat(msgs)
         _usage(r, info)
-        text = r.choices[0].message.content or ""
+        msg = r.choices[0].message
+        text = msg.content or ""
         acts, notes = parse_plan(text)
-        if self.log_text:
-            info["response"] = text[-2000:]
+        record_reply(info, msgs[1]["content"], text, _thinking(msg))
         return Plan(acts, notes, info)
 
 
@@ -337,6 +384,9 @@ class ToolAgent(LLMAgent):
             r = self.client.chat(msgs, TOOLS if calls < self.calls else None)
             _usage(r, info)
             msg = r.choices[0].message
+            th = _thinking(msg)
+            if th:
+                info["thinking"] = (info.get("thinking", "") + "\n\n" + th).strip()
             tcs = msg.tool_calls or []
             if not tcs:
                 text = msg.content or ""
@@ -354,14 +404,15 @@ class ToolAgent(LLMAgent):
                 res = self.tool(d, t.function.name, args) if calls <= self.calls else {
                     "error": "tool budget exhausted; answer now"}
                 info["tools"].append({"tool": t.function.name, "args": args,
+                                      "say": msg.content or "",
                                       "result": {k: v for k, v in res.items()
-                                                 if k not in ("state", "legal_actions")}})
+                                                 if k != "legal_actions"}})
                 msgs.append({"role": "tool", "tool_call_id": t.id, "content": json.dumps(res)})
             if calls >= self.calls:
                 msgs.append({"role": "user", "content": "No more tool calls. Answer now with "
                                                         "the JSON object only."})
         info["tool_calls"] = calls
         acts, notes = parse_plan(text)
-        if self.log_text:
-            info["response"] = text[-2000:]
+        th = info.pop("thinking", "")
+        record_reply(info, msgs[1]["content"], text, th)
         return Plan(acts, notes, info)

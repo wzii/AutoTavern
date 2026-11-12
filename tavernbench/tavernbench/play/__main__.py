@@ -19,6 +19,7 @@ import argparse
 import concurrent.futures as cf
 import json
 import threading
+import time
 from pathlib import Path
 
 from ..run_openai import DEFAULT_ENV
@@ -94,6 +95,16 @@ def main():
     done = {r["seed"] for r in read_rows(games)}
     todo = [s for s in seeds(a.seeds) if s not in done]
     config = json.loads(a.config) if a.config else None
+    system = AG.SYSTEM + (AG.TOOL_NOTE.format(calls=a.calls, sims=a.sims)
+                          if a.agent == "tools" else "")
+    with open(out / "run.json", "w") as f:  # what every decision of the run shares
+        json.dump({"agent": a.agent, "model": a.model, "backend": a.backend,
+                   "effort": a.effort if a.backend == "claude-cli" else None,
+                   "system_prompt": system if a.agent in ("llm", "tools") else None,
+                   "settings": {k: getattr(a, k) for k in (
+                       "seat", "config", "turn_cap", "max_plan", "retries", "calls", "sims",
+                       "max_tokens", "temperature", "extra")},
+                   "time": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=1)
     print(f"{a.agent} {a.model}: {len(todo)} games to play ({len(done)} done)", flush=True)
     lock = threading.Lock()
 

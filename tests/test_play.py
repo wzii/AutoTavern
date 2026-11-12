@@ -89,3 +89,28 @@ def test_simulate_uses_the_seen_warband_only():
     # the live game is untouched
     assert json.loads(g.view(0))["opponents"] == json.loads(_recruit_game(3, 6).view(0))[
         "opponents"]
+
+
+class _BuyThenEnd:
+    """Buys the first card it can and ends the turn in the same plan."""
+
+    def __init__(self):
+        self.feedback = []
+
+    def decide(self, d):
+        if d.feedback:
+            self.feedback.append(d.feedback)
+        buys = [a for a in d.legal if A.BUY <= a < A.SELL]
+        if buys and d.view["phase"] == "recruit" and not d.view["me"]["board"]:
+            return Plan([buys[0], A.END])
+        return Plan([A.END] if A.END in d.legal else [d.legal[0]])
+
+
+def test_end_guard_asks_before_ending_with_minions_in_hand():
+    agent, recs = _BuyThenEnd(), []
+    Match(agent, seed=2, trace=recs.append).play()
+    held = [r for r in recs if r["stop"].startswith("you tried to end the turn")]
+    assert held and any(f.startswith("you tried to end the turn") for f in agent.feedback)
+    # the second End Turn of that turn goes through
+    t = held[0]["turn"]
+    assert any(r["turn"] == t and r["plan"] == [A.END] and r["executed"] == 1 for r in recs)

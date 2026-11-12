@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root {
+  --bg: #f6f3ee; --panel: #fffdf9; --ink: #1f1b16; --muted: #6f665b; --line: #e3dbcf;
+  --accent: #8a5a12; --accent-soft: #f3e6cf; --win: #2f7d4f; --loss: #b4442f; --tie: #8a7f72;
+  --gold: #c9971f; --shield: #3fa7c9; --atk: #d0482f; --def: #e3a12c; --card: #fbf7f0;
+  --spell: #efe9f6; --chip: #efe8dc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15130f; --panel: #1e1b16; --ink: #ece5da; --muted: #a59a8b; --line: #353027;
+    --accent: #e0aa50; --accent-soft: #3a2f1d; --win: #5cc188; --loss: #ea7a62; --tie: #a59a8b;
+    --gold: #e2b84a; --shield: #5ec4e6; --atk: #f06a50; --def: #f0b54a; --card: #26221c;
+    --spell: #2a2533; --chip: #2b261f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15130f; --panel: #1e1b16; --ink: #ece5da; --muted: #a59a8b; --line: #353027;
+  --accent: #e0aa50; --accent-soft: #3a2f1d; --win: #5cc188; --loss: #ea7a62; --tie: #a59a8b;
+  --gold: #e2b84a; --shield: #5ec4e6; --atk: #f06a50; --def: #f0b54a; --card: #26221c;
+  --spell: #2a2533; --chip: #2b261f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, #turns, main { padding-left: max(24px, env(safe-area-inset-left, 0px));
+  padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+header { padding-block: 18px 10px; display: flex; flex-wrap: wrap; gap: 10px 24px;
+  align-items: baseline; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+.meta { color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.meta b { color: var(--ink); font-weight: 600; }
+.place { font-size: 15px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); }
+.ok { color: var(--win); } .bad { color: var(--loss); }
+#turns { display: flex; gap: 6px; overflow-x: auto; padding-block: 6px 14px;
+  scrollbar-width: thin; }
+.tchip { flex: 0 0 auto; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 10px; padding: 6px 10px; cursor: pointer; text-align: center; min-width: 58px;
+  font: inherit; }
+.tchip .t { font-weight: 700; font-size: 13px; }
+.tchip .hp { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tchip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-left: 4px; vertical-align: middle; }
+.tchip.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+main { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px;
+  padding-block: 0 32px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px 16px; }
+.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 0 0 10px; font-weight: 600; }
+#decisions { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 170px);
+  overflow-y: auto; }
+.dec { border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; cursor: pointer;
+  background: var(--panel); }
+.dec.sel { border-color: var(--accent); background: var(--accent-soft); }
+.dec .did { margin: 0; padding-left: 18px; }
+.dec .did li { margin: 1px 0; }
+.dec .why { color: var(--muted); font-style: italic; margin-top: 6px; }
+.dec .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: var(--chip); color: var(--muted); margin-top: 6px; margin-right: 4px; }
+.dec .tag.warn { color: var(--loss); }
+.dec .hdr { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px;
+  margin-bottom: 4px; }
+.right { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.stats { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 10px; }
+.stats span b { font-variant-numeric: tabular-nums; }
+.zone { margin-top: 10px; }
+.zone .lbl { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; min-height: 112px; align-items: flex-start; }
+.empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+.card { position: relative; width: 92px; height: 108px; border-radius: 12px; background: var(--card);
+  border: 1.5px solid var(--line); padding: 6px 6px 22px; display: flex; flex-direction: column;
+  gap: 2px; cursor: default; transition: transform .15s, box-shadow .15s; }
+.card.gold { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.card.taunt { border-width: 3px; border-radius: 6px 6px 16px 16px; }
+.card.ds { box-shadow: 0 0 0 2.5px var(--shield); }
+.card.spell { background: var(--spell); border-style: dashed; }
+.card.atk { box-shadow: 0 0 0 3px var(--atk); transform: translateY(-4px); }
+.card.def { box-shadow: 0 0 0 3px var(--def); }
+.card .tier { font-size: 10px; color: var(--muted); }
+.card .nm { font-size: 12px; font-weight: 600; line-height: 1.2; display: -webkit-box;
+  -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.card .kw { font-size: 9.5px; color: var(--muted); line-height: 1.15; overflow: hidden;
+  max-height: 22px; }
+.card .st { position: absolute; bottom: 4px; left: 6px; right: 6px; display: flex;
+  justify-content: space-between; font-weight: 700; font-size: 13px;
+  font-variant-numeric: tabular-nums; }
+.card .st .a { color: var(--accent); } .card .st .h { color: var(--loss); }
+.card .pr { position: absolute; bottom: 4px; right: 6px; font-size: 11px; color: var(--muted); }
+.pending { margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: var(--accent-soft); }
+.pending ol { margin: 4px 0 0; padding-left: 22px; }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--muted); }
+pre { white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--line);
+  max-height: 420px; overflow: auto; }
+.lobby { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
+.lobby td { padding: 3px 6px; border-top: 1px solid var(--line); }
+.lobby tr.next td { font-weight: 600; }
+.lobby tr.dead td { color: var(--muted); text-decoration: line-through; }
+.ctitle { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px;
+  align-items: baseline; }
+.res { font-weight: 700; } .res.win { color: var(--win); } .res.loss { color: var(--loss); }
+.res.tie { color: var(--tie); }
+.side { font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+.vs { border-top: 1px dashed var(--line); margin: 10px 0 2px; }
+.controls { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.controls button { font: inherit; border: 1px solid var(--line); background: var(--chip);
+  color: var(--ink); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+.controls button:hover { border-color: var(--accent); }
+.controls input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+.controls .fr { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 64px; }
+.log { margin-top: 8px; font-size: 12.5px; min-height: 40px; }
+.log div { padding: 1px 0; }
+.nocombat { color: var(--muted); font-style: italic; }
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; }
+  header, #turns, main { padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  #decisions { max-height: none; }
+  .card { width: 78px; height: 100px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Replay</h1>
+  <span class="place" id="place"></span>
+  <div class="meta" id="meta"></div>
+</header>
+<div id="turns"></div>
+<main>
+  <section class="panel">
+    <h2 id="dtitle">Decisions</h2>
+    <div id="decisions"></div>
+  </section>
+  <div class="right">
+    <section class="panel" id="state"></section>
+    <section class="panel" id="combat"></section>
+  </div>
+</main>
+<script>
+const DATA = /*__DATA__*/null;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const M = DATA.meta, D = DATA.decisions, C = DATA.combats;
+const turns = [...new Set(D.map((d) => d.turn))];
+const combatOf = (t) => C.find((c) => c.turn === t);
+const hero = (id) => DATA.heroes[id] || `player ${id}`;
+let curTurn = turns.includes(1) ? 1 : turns[0], curDec = 0, frame = 0, timer = null;
+
+$("#title").textContent = `${M.model || M.agent} · seed ${M.seed}`;
+$("#place").textContent = `Place ${M.placement}`;
+const fmt = (x) => (x == null ? "–" : x);
+$("#meta").innerHTML = [
+  `<span>agent <b>${esc(M.agent)}</b></span>`,
+  `<span>last turn <b>${fmt(M.turns)}</b></span>`,
+  `<span>decisions <b>${fmt(M.decisions)}</b></span>`,
+  `<span>illegal <b>${fmt(M.illegal)}</b></span>`,
+  `<span>bot fallbacks <b>${fmt(M.fallbacks)}</b></span>`,
+  M.cost_usd ? `<span>cost <b>$${M.cost_usd.toFixed(2)}</b></span>` : "",
+  `<span class="${M.verified ? "ok" : "bad"}">${M.verified ? "✓ replay matches the game" : "✗ replay differs from the game"}</span>`,
+].join("");
+
+function card(c, hl) {
+  const cls = ["card"];
+  if (c.g) cls.push("gold");
+  if (c.s) cls.push("spell");
+  if (c.k.includes("Taunt")) cls.push("taunt");
+  if (c.k.includes("Divine Shield")) cls.push("ds");
+  if (hl && hl.atk.has(c.e)) cls.push("atk");
+  if (hl && hl.def.has(c.e)) cls.push("def");
+  const kws = c.k.filter((k) => k !== "Taunt" && k !== "Divine Shield");
+  const tip = `${c.g ? "Golden " : ""}${c.n}${c.s ? "" : ` (${c.r.join("/") || "no tribe"}, tier ${c.t}) ${c.a}/${c.h}`}${c.k.length ? " [" + c.k.join(", ") + "]" : ""}${c.x ? "\n" + c.x : ""}`;
+  const bottom = c.s ? (c.p != null ? `<div class="pr">${c.p}g</div>` : "")
+    : `<div class="st"><span class="a">${c.a}</span><span class="h">${c.h}</span></div>`;
+  return `<div class="${cls.join(" ")}" title="${esc(tip)}">
+    <div class="tier">${c.s ? "Spell" : "T" + c.t}${c.r.length ? " · " + esc(c.r.join("/")) : ""}</div>
+    <div class="nm">${esc(c.n)}</div>${kws.length ? `<div class="kw">${esc(kws.join(", "))}</div>` : ""}
+    ${bottom}</div>`;
+}
+const row = (cards, hl) => cards.length ? `<div class="row">${cards.map((c) => card(c, hl)).join("")}</div>`
+  : `<div class="row"><div class="empty">empty</div></div>`;
+
+function renderTurns() {
+  $("#turns").innerHTML = turns.map((t) => {
+    const d = D.find((x) => x.turn === t), c = combatOf(t);
+    const col = !c ? "transparent" : c.result === "win" ? "var(--win)" : c.result === "loss" ? "var(--loss)" : "var(--tie)";
+    const label = t === 0 ? "Hero" : "T" + t;
+    return `<button class="tchip${t === curTurn ? " sel" : ""}" data-t="${t}">
+      <div class="t">${label}<span class="dot" style="background:${col}"></span></div>
+      <div class="hp">♥ ${d.me.health}${d.me.armor ? "+" + d.me.armor : ""}</div></button>`;
+  }).join("");
+  document.querySelectorAll(".tchip").forEach((b) => b.onclick = () => selectTurn(+b.dataset.t));
+  const sel = $(".tchip.sel"); if (sel) sel.scrollIntoView({block: "nearest", inline: "nearest"});
+}
+
+function renderDecisions() {
+  const list = D.map((d, i) => [d, i]).filter(([d]) => d.turn === curTurn);
+  $("#dtitle").textContent = `${curTurn === 0 ? "Hero choice" : "Turn " + curTurn} · ${list.length} decision${list.length === 1 ? "" : "s"}`;
+  $("#decisions").innerHTML = list.map(([d, i], k) => {
+    const did = d.did.length ? `<ol class="did">${d.did.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`
+      : `<div class="empty">nothing executed</div>`;
+    const tags = [];
+    if (d.stop) tags.push(`<span class="tag${d.stop.startsWith("action") || d.stop.startsWith("the plan") ? " warn" : ""}">${esc(d.stop)}</span>`);
+    if (d.error) tags.push(`<span class="tag warn">${esc(d.error)}</span>`);
+    if (d.tools.length) tags.push(`<span class="tag">${d.tools.length} tool call${d.tools.length > 1 ? "s" : ""}</span>`);
+    return `<div class="dec${i === curDec ? " sel" : ""}" data-i="${i}">
+      <div class="hdr"><span>#${k + 1} · plan [${(d.plan || []).join(", ")}]</span>
+      <span>${d.latency != null ? d.latency + "s" : ""}${d.cost ? " · $" + d.cost.toFixed(3) : ""}</span></div>
+      ${did}${d.reasoning ? `<div class="why">“${esc(d.reasoning)}”</div>` : ""}${tags.join("")}</div>`;
+  }).join("");
+  document.querySelectorAll(".dec").forEach((el) => el.onclick = () => { curDec = +el.dataset.i; renderDecisions(); renderState(); });
+}
+
+function renderState() {
+  const d = D[curDec], m = d.me;
+  const pend = m.pending.length ? `<div class="pending"><b>Pending choice (${esc(m.pending_kind)})</b>
+    <ol start="0">${m.pending.map((p) => `<li>${esc(p)}</li>`).join("")}</ol></div>` : "";
+  const lobby = d.lobby.length ? `<details><summary>Lobby</summary><table class="lobby">${d.lobby.map((o) =>
+    `<tr class="${o.next ? "next" : ""}${o.alive ? "" : " dead"}"><td>player ${o.id}</td><td>${esc(o.hero)}</td>
+     <td>♥ ${o.health}${o.armor ? "+" + o.armor : ""}</td><td>tier ${o.tier}</td><td>${o.next ? "next opponent" : ""}</td></tr>`).join("")}</table></details>` : "";
+  const notes = d.notes ? `<details><summary>Model's notes</summary><pre>${esc(d.notes)}</pre></details>` : "";
+  $("#state").innerHTML = `<h2>State before this decision</h2>
+    ${d.phase === "hero_select" ? "" : `<div class="stats">
+      <span><b>${esc(m.hero)}</b></span><span>♥ <b>${m.health}</b>${m.armor ? " + " + m.armor + " armor" : ""}</span>
+      <span>Tier <b>${m.tier}</b></span><span>Gold <b>${m.gold}/${m.max_gold}</b></span></div>
+    <div class="zone"><div class="lbl">Tavern</div>${row(m.shop)}</div>
+    <div class="zone"><div class="lbl">Warband (attacks left to right)</div>${row(m.board)}</div>
+    <div class="zone"><div class="lbl">Hand</div>${row(m.hand)}</div>`}
+    ${pend}${lobby}${notes}
+    ${d.told ? `<details open><summary>Told before this step</summary><pre>${esc(d.told)}</pre></details>` : ""}
+    ${d.thinking ? `<details><summary>Model thinking</summary><pre>${esc(d.thinking)}</pre></details>` : ""}
+    ${d.response ? `<details><summary>Model reply (raw)</summary><pre>${esc(d.response)}</pre></details>` : ""}
+    ${d.tools.length ? `<details><summary>Tool calls (${d.tools.length})</summary><pre>${esc(d.tools.map((t) => t.tool + "(" + JSON.stringify(t.args) + ")\n  -> " + JSON.stringify(t.result)).join("\n\n"))}</pre></details>` : ""}
+    <details><summary>What the model was shown</summary><pre>${esc(d.prompt || d.state)}</pre></details>`;
+}
+
+function renderCombat() {
+  stop();
+  const c = combatOf(curTurn), el = $("#combat");
+  if (!c) { el.innerHTML = `<h2>Combat</h2><div class="nocombat">No combat recorded for this turn.</div>`; return; }
+  const n = c.frames.length;
+  const resText = c.result === "win" ? `Win · dealt ${c.damage}` : c.result === "loss" ? `Loss · took ${c.damage}` : "Tie";
+  el.innerHTML = `<div class="ctitle"><h2>Combat · vs ${c.opponent == null ? "a ghost" : esc(hero(c.opponent)) + " (player " + c.opponent + ")"}</h2>
+    <span class="res ${c.result}">${resText}</span></div>
+    <div class="side">Opponent</div><div id="opp"></div><div class="vs"></div>
+    <div class="side">You</div><div id="mine"></div>
+    <div class="controls"><button id="first" title="First">⏮</button><button id="prev" title="Previous (←)">◀</button>
+    <button id="play">Play</button><button id="next" title="Next (→)">▶</button><button id="last" title="Last">⏭</button>
+    <input type="range" id="slider" min="0" max="${Math.max(0, n - 1)}" value="0"><span class="fr" id="fr"></span></div>
+    <div class="log" id="log"></div>`;
+  $("#first").onclick = () => setFrame(0); $("#last").onclick = () => setFrame(n - 1);
+  $("#prev").onclick = () => setFrame(frame - 1); $("#next").onclick = () => setFrame(frame + 1);
+  $("#slider").oninput = (e) => setFrame(+e.target.value);
+  $("#play").onclick = () => timer ? stop() : play();
+  setFrame(0);
+}
+function setFrame(k) {
+  const c = combatOf(curTurn); if (!c || !c.frames.length) return;
+  frame = Math.max(0, Math.min(c.frames.length - 1, k));
+  const f = c.frames[frame];
+  const hl = {atk: new Set(f.attacks.map((x) => x[0])), def: new Set(f.attacks.map((x) => x[1]))};
+  $("#opp").innerHTML = row(f.opp, hl); $("#mine").innerHTML = row(f.me, hl);
+  $("#slider").value = frame; $("#fr").textContent = `${frame + 1} / ${c.frames.length}`;
+  $("#log").innerHTML = f.log.length ? f.log.map((l) => `<div>${esc(l.replace(/^\[t\d+\]\s*/, ""))}</div>`).join("")
+    : `<div class="nocombat">${frame === 0 ? "Start of combat" : "—"}</div>`;
+  if (frame === c.frames.length - 1) stop();
+}
+function play() { const c = combatOf(curTurn); if (!c) return; if (frame >= c.frames.length - 1) setFrame(0);
+  $("#play").textContent = "Pause"; timer = setInterval(() => setFrame(frame + 1), 900); }
+function stop() { if (timer) clearInterval(timer); timer = null; const b = $("#play"); if (b) b.textContent = "Play"; }
+
+function selectTurn(t) {
+  curTurn = t; curDec = D.findIndex((d) => d.turn === t);
+  renderTurns(); renderDecisions(); renderState(); renderCombat();
+}
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowRight") setFrame(frame + 1);
+  if (e.key === "ArrowLeft") setFrame(frame - 1);
+  const i = turns.indexOf(curTurn);
+  if (e.key === "ArrowDown" && i < turns.length - 1) { e.preventDefault(); selectTurn(turns[i + 1]); }
+  if (e.key === "ArrowUp" && i > 0) { e.preventDefault(); selectTurn(turns[i - 1]); }
+});
+selectTurn(curTurn);
+</script>
+</body>
+</html>

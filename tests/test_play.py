@@ -177,3 +177,26 @@ def test_buy_then_play_in_one_plan():
     m = Match(AG.BotAgent(), seed=0)
     done, stop = m._execute(g, [A.BUY + i, A.PLAY + n * A.N_POS + b], [])
     assert done == 2 and len(V.public_view(g, 0)["me"]["board"]) == b + 1, stop
+
+
+def test_prompt_shows_what_a_player_sees():
+    """Every opponent's last-seen warband, Hero Power and trinkets, and the last combat as the
+    player watched it (both warbands and the events) are in the text."""
+    g = taverngym.Game(seed=9)
+    g.set_record_log(True)
+    while not (g.turn >= 9 and g.needs_action(0)):
+        for p in range(8):
+            if g.needs_action(p):
+                g.step(p, g.bot_action(p))
+    v = V.public_view(g, 0)
+    text = V.render(v, V.own_combats(g, 0, detail=True))
+    for o in v["opponents"]:
+        if o["alive"] and o.get("seen_board"):
+            assert f"warband you saw on turn {o['seen_turn']}" in text
+            assert all(c["name"] in text for c in o["seen_board"])
+        for t in o.get("trinkets") or []:
+            assert t["name"] in text
+    assert "Hero Power" in text and "What happened:" in text
+    assert "Their warband at the start:" in text and "Your warband at the start:" in text
+    if v["me"].get("deity"):
+        assert "Your Deity:" in text

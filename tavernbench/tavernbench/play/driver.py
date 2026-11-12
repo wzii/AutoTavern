@@ -198,8 +198,10 @@ class Match:
     def _decision(self, g, turn_log, feedback, notes) -> Decision:
         v = V.public_view(g, self.seat)
         legal, text = A.listing(g, self.seat, v)
-        combats = V.own_combats(g, self.seat) if v["phase"] == "recruit" and not turn_log \
-            else []
+        # The result of the last combat at every decision; what happened in it (both warbands
+        # and the events, as a player watches it) at the first decision of the turn.
+        combats = V.own_combats(g, self.seat, detail=not turn_log) \
+            if v["phase"] == "recruit" else []
         return Decision(g, self.seat, v, V.render(v, combats), legal, text, list(turn_log),
                         feedback, notes)
 
@@ -307,8 +309,7 @@ class Match:
 
     def play(self) -> dict:
         g = self.game = _core.Game(self.seed, self.config_json)
-        if self.record_combats:
-            g.set_record_log(True)
+        g.set_record_log(True)  # combat events for the agent's view (does not change the RNG)
         notes = [""]
         turn, turn_log, turn_actions, last_turn, seen = -1, [], 0, 0, 0
         t0 = time.time()

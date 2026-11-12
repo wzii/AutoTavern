@@ -354,8 +354,12 @@ def handler(lobby: Lobby, page: str, chooser: str):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--humans", default="0", help="seats played in the browser, e.g. 0,1")
-    ap.add_argument("--llm", default="", help="seats played by the language model, e.g. 1,2")
-    ap.add_argument("--llm-agent", choices=["llm", "tools"], default="llm")
+    ap.add_argument("--llm", default="", help="seats played by the AI agent, e.g. 1,2")
+    ap.add_argument("--llm-agent", choices=["llm", "tools", "custom"], default="llm",
+                    help="custom: your own agent class (--agent-class)")
+    ap.add_argument("--agent-class", default="", help="module:ClassName of your agent")
+    ap.add_argument("--agent-args", default="", help="its constructor arguments (JSON)")
+    ap.add_argument("--label", default="", help="the AI seats' name in the lobby")
     ap.add_argument("--backend", choices=["openai", "claude-cli"], default="openai")
     ap.add_argument("--model", default="")
     ap.add_argument("--effort", default="low")
@@ -385,18 +389,24 @@ def main():
     humans, llm = _ints(a.humans), _ints(a.llm)
     if set(humans) & set(llm) or not all(0 <= p < 8 for p in humans + llm):
         ap.error("--humans and --llm must be different seats between 0 and 7")
-    if llm and not a.model:
+    if llm and a.llm_agent != "custom" and not a.model:
         ap.error("--model is required for --llm seats")
+    if a.llm_agent == "custom" and not a.agent_class:
+        ap.error("--llm-agent custom needs --agent-class module:ClassName")
     if a.backend == "claude-cli" and a.llm_agent == "tools":
         ap.error("the claude-cli backend supports --llm-agent llm only")
     seed = a.seed if a.seed is not None else int(time.time()) % 100000
 
     def make_agent(p):
+        if a.llm_agent == "custom":
+            return AG.load_agent(a.agent_class, json.loads(a.agent_args) if a.agent_args
+                                 else None)
         client = AG.ClaudeCLIClient(a) if a.backend == "claude-cli" else AG.Client(a)
         return AG.ToolAgent(client, a.calls, a.sims) if a.llm_agent == "tools" else \
             AG.LLMAgent(client)
 
-    label = (a.model or "AI").replace("-", " ").title() + " (AI)"
+    label = a.label or ((a.agent_class.split(":")[-1] if a.llm_agent == "custom" else
+                         (a.model or "AI").replace("-", " ").title()) + " (AI)")
     log_dir = Path(a.log_dir or f"runs/lobby/{seed}-{time.strftime('%Y%m%d-%H%M%S')}")
     lobby = Lobby(seed, humans, llm, make_agent, json.loads(a.config) if a.config else None,
                   a.turn_cap, a.retries, a.max_plan, a.show_thoughts, label, log_dir)
@@ -405,7 +415,8 @@ def main():
     with open(log_dir / "run.json", "w") as f:
         json.dump({"seed": seed, "humans": humans, "llm": llm, "model": a.model,
                    "backend": a.backend, "agent": a.llm_agent,
-                   "system_prompt": system if llm else None,
+                   "agent_class": a.agent_class or None,
+                   "system_prompt": system if llm and a.llm_agent != "custom" else None,
                    "time": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=1)
     page = Path(__file__).with_name("play_ui.html").read_text(encoding="utf-8")
     links = "".join(f'<li><a href="/?seat={p}">Seat {p}</a></li>' for p in sorted(humans))

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 
 KW = {
     "DIVINE_SHIELD": "Divine Shield", "TAUNT": "Taunt", "VENOMOUS": "Venomous",
@@ -33,14 +34,51 @@ def public_view(g, p: int) -> dict:
     return v
 
 
-def own_combats(g, p: int) -> list[dict]:
-    """The seat's combats of the last round (winner and damage; no replay frames)."""
+def own_combats(g, p: int, detail: bool = False) -> list[dict]:
+    """The seat's combats of the last round: winner and damage, and with `detail` what the
+    player watched: both warbands at the start and the combat's events (the engine records
+    them when `record_log` is on)."""
     if hasattr(g, "public_view"):
         cs = json.loads(g.public_view(p, True)).get("combats", [])
     else:
         cs = json.loads(g.view(p)).get("combats", [])
-    return [{k: c.get(k) for k in ("turn", "a", "b", "winner", "damage", "truncated")}
-            for c in cs if c.get("a") == p or c.get("b") == p]
+    out = []
+    for c in cs:
+        if p not in (c.get("a"), c.get("b")):
+            continue
+        r = {k: c.get(k) for k in ("turn", "a", "b", "winner", "damage", "truncated")}
+        frames = c.get("frames") or []
+        if detail and frames:
+            side = 0 if c["a"] == p else 1
+            r["start_me"] = frames[0]["boards"][side]
+            r["start_opp"] = frames[0]["boards"][1 - side]
+            r["log"] = [line for f in frames for line in f.get("log", [])]
+        out.append(r)
+    return out
+
+
+@lru_cache(maxsize=1)
+def _catalog() -> dict:
+    from taverngym import _core
+    return {c["id"]: c for c in json.loads(_core.catalog_json())}
+
+
+def _event(line: str, seat: int) -> str:
+    """An engine log line in the player's words."""
+    line = re.sub(r"^\[t\d+\]\s*", "", line)
+    line = re.sub(rf"\bp{seat}'s\b", "your", line)
+    line = re.sub(rf"\bp{seat}\b", "you", line)
+    line = re.sub(r"\byou (gets|summons|gains|discovers|upgrades|plays|buys|sells)\b",
+                  lambda m: "you " + m.group(1)[:-1], line)
+    line = line.replace("you start of turn:", "start of turn:")
+    return re.sub(r"\bp(\d)\b", r"player \1", line)
+
+
+def compact(c: dict) -> str:
+    """A minion in a few words: name, stats, keywords."""
+    kws = [kw(k) for k in c.get("keywords") or [] if k != "MAGNETIC"]
+    return (("Golden " if c.get("golden") else "") + f"{c.get('name', '?')} "
+            f"{c.get('atk', 0)}/{c.get('hp', 0)}" + (f" [{', '.join(kws)}]" if kws else ""))
 
 
 KIND = {"tavern_spell": "Tavern spell", "spell": "spell", "trinket_lesser": "lesser trinket",
@@ -90,6 +128,8 @@ def card(c: dict, i: int | None = None, price=False) -> str:
             s += f" (you own {c['owned']}/{c['triple_need']} for a triple)"
     if c.get("frozen"):
         s += " (frozen)"
+    if c.get("temporary"):
+        s += " (temporary: leaves your hand at the end of the turn)"
     t = _text(c)
     return s + (f" - {t}" if t else "")
 
@@ -155,6 +195,8 @@ def render(v: dict, combats: list[dict] | None = None) -> str:
     tribes = ", ".join(r.title() for r in v.get("lobby_races", []))
     lines = [(f"Turn {v['turn']} ({v['phase'].replace('_', ' ')}). "
               f"Players alive: {v['alive']}. Tribes in this lobby: {tribes}.")]
+    if v.get("paradox"):
+        lines.append(f"This lobby's Paradox: {v['paradox'].get('name')} - {_text(v['paradox'])}")
     if v.get("phase") != "hero_select":
         hero = (me.get("hero") or {}).get("name", "?")
         lines.append(
@@ -186,8 +228,36 @@ def render(v: dict, combats: list[dict] | None = None) -> str:
                          f"{q['reward'].get('name')}: {_text(q['reward'])}")
         dg = me.get("dark_gift") or {}
         if dg.get("available"):
+            tiers = "/".join(str(t) for t in dg.get("tiers") or [])
+            nxt = "/".join(str(t) for t in dg.get("next_tiers") or [])
             lines.append(f"Dark Gift available (cost {dg.get('cost')}, used {dg.get('uses')}/"
-                         f"{dg.get('max_uses')}).")
+                         f"{dg.get('max_uses')})" + (f": offers tier {tiers} minions now" if tiers
+                                                    else "")
+                         + (f", tier {nxt} next turn" if nxt else "") + ".")
+        dt = me.get("deity")
+        if dt:
+            kwd = [w for w, on in (("Golden", dt.get("golden")), ("Reborn", dt.get("reborn"))) if on]
+            lines.append(f"Your Deity: {(dt.get('card') or {}).get('name', '?')} {dt.get('atk')}/"
+                         f"{dt.get('hp')}" + (f" [{', '.join(kwd)}]" if kwd else "")
+                         + f" - {_text(dt.get('card') or {})}")
+        for e in me.get("effects") or []:
+            lines.append(f"Active effect: {(e.get('card') or {}).get('name', '?')}"
+                         + (f" x{e['stacks']}" if (e.get("stacks") or 1) > 1 else "")
+                         + f" - {_text(e.get('card') or {})}")
+        for e in me.get("scheduled") or []:
+            lines.append(f"Coming up: {(e.get('card') or {}).get('name', '?')} in "
+                         f"{e.get('turns_left')} turn(s)" + (" if you win" if e.get("if_won")
+                                                             else "")
+                         + f" - {_text(e.get('card') or {})}")
+        bb = me.get("buddy_button")
+        if bb and bb.get("available"):
+            lines.append(f"Buddy available: {(bb.get('card') or {}).get('name')} for "
+                         f"{bb.get('price')} Gold - {_text(bb.get('card') or {})}")
+        # only what happened to this player (the others' events are not on its screen)
+        ev = [_event(x, seat) for x in me.get("turn_events") or []
+              if re.search(rf"\bp{seat}\b", x)]
+        if ev:
+            lines.append("At the start of this turn: " + "; ".join(ev) + ".")
         lines += zone("Your warband (left to right; attacks in this order)", me["board"])
         lines += zone(f"Your hand ({len(me['hand'])}/{me.get('hand_limit', 10)})", me["hand"])
         lines += zone("Tavern", me["shop"], price=True)
@@ -221,12 +291,26 @@ def render(v: dict, combats: list[dict] | None = None) -> str:
             if tags:
                 s += " [" + ", ".join(tags) + "]"
             lines.append(s)
-            if o.get("is_next_opponent") or o.get("was_last_opponent"):
-                if o.get("seen_board"):
+            hp = _catalog().get((o.get("hero") or {}).get("hero_power_id") or "")
+            if hp:
+                lines.append(f"    Hero Power {hp.get('name')}: {_text(hp)}")
+            if o.get("trinkets"):
+                lines.append("    Trinkets: " + "; ".join(
+                    f"{t.get('name')} - {_text(t)}" for t in o["trinkets"]))
+            for q in o.get("quests") or []:
+                lines.append(f"    Quest: {q['quest'].get('name')} ({q.get('progress')}/"
+                             f"{q.get('goal')}), reward {q['reward'].get('name')}")
+            if o.get("rewards"):
+                lines.append("    Rewards: " + "; ".join(r.get("name", "?") for r in o["rewards"]))
+            if o.get("seen_board"):
+                if o.get("is_next_opponent"):
                     lines.append(f"    warband you saw on turn {o.get('seen_turn')}:")
                     lines += ["      " + card(c, i) for i, c in enumerate(o["seen_board"])]
-                elif o.get("is_next_opponent"):
-                    lines.append("    (you have not fought this player yet)")
+                else:
+                    lines.append(f"    warband you saw on turn {o.get('seen_turn')}: "
+                                 + ", ".join(compact(c) for c in o["seen_board"]))
+            elif o.get("is_next_opponent"):
+                lines.append("    (you have not fought this player yet)")
         if me.get("next_is_ghost"):
             lines.append("  Your next opponent is a ghost of an eliminated player.")
     for c in combats or []:
@@ -241,4 +325,14 @@ def render(v: dict, combats: list[dict] | None = None) -> str:
         else:
             res = f"you lost and took {c.get('damage')} damage"
         lines.append(f"Last combat (turn {c.get('turn')}) against {other}: {res}.")
+        if c.get("log") is not None:
+            lines.append("  Their warband at the start: "
+                         + (", ".join(compact(m) for m in c.get("start_opp") or []) or "empty"))
+            lines.append("  Your warband at the start: "
+                         + (", ".join(compact(m) for m in c.get("start_me") or []) or "empty"))
+            log = [_event(x, seat) for x in c["log"]]
+            if len(log) > 60:
+                log = log[:60] + [f"... ({len(log) - 60} more events)"]
+            lines.append("  What happened:")
+            lines += ["    " + x for x in log]
     return "\n".join(lines)

@@ -46,6 +46,8 @@ def read_rows(path: Path) -> list[dict]:
 
 
 def make_agent(a, seed):
+    if a.agent == "custom":
+        return AG.load_agent(a.agent_class, json.loads(a.agent_args) if a.agent_args else None)
     if a.agent == "bot":
         return AG.BotAgent()
     if a.agent == "random":
@@ -62,7 +64,12 @@ def make_agent(a, seed):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agent", choices=["llm", "tools", "bot", "random"], default="llm")
+    ap.add_argument("--agent", choices=["llm", "tools", "bot", "random", "custom"],
+                    default="llm")
+    ap.add_argument("--agent-class", default="",
+                    help="with --agent custom: module:ClassName of your agent")
+    ap.add_argument("--agent-args", default="",
+                    help="with --agent custom: constructor arguments as a JSON object")
     ap.add_argument("--model", default="")
     ap.add_argument("--backend", choices=["openai", "claude-cli"], default="openai",
                     help="claude-cli: Claude through the signed-in Claude Code CLI")
@@ -88,6 +95,8 @@ def main():
     a = ap.parse_args()
     if a.agent in ("llm", "tools") and not a.model:
         ap.error("--model is required for --agent llm/tools")
+    if a.agent == "custom" and not a.agent_class:
+        ap.error("--agent custom needs --agent-class module:ClassName")
 
     out = Path(a.out)
     (out / "traces").mkdir(parents=True, exist_ok=True)
@@ -98,7 +107,8 @@ def main():
     system = AG.SYSTEM + (AG.TOOL_NOTE.format(calls=a.calls, sims=a.sims)
                           if a.agent == "tools" else "")
     with open(out / "run.json", "w") as f:  # what every decision of the run shares
-        json.dump({"agent": a.agent, "model": a.model, "backend": a.backend,
+        json.dump({"agent": a.agent, "agent_class": a.agent_class or None, "model": a.model,
+                   "backend": a.backend,
                    "effort": a.effort if a.backend == "claude-cli" else None,
                    "system_prompt": system if a.agent in ("llm", "tools") else None,
                    "settings": {k: getattr(a, k) for k in (

@@ -105,6 +105,24 @@ def user_prompt(d: Decision) -> str:
     return "\n\n".join(parts)
 
 
+def load_agent(spec: str, kwargs: dict | None = None):
+    """Your own agent from "package.module:ClassName" (importable from the working directory),
+    constructed with `kwargs`. Any object with `decide(decision) -> Plan` works."""
+    import importlib
+    import sys
+    from pathlib import Path
+    mod, _, name = spec.partition(":")
+    if not name:
+        raise SystemExit("--agent-class takes module:ClassName, e.g. my_agent:MyAgent")
+    if str(Path.cwd()) not in sys.path:
+        sys.path.insert(0, str(Path.cwd()))
+    cls = getattr(importlib.import_module(mod), name)
+    agent = cls(**(kwargs or {}))
+    if not callable(getattr(agent, "decide", None)):
+        raise SystemExit(f"{spec} has no decide(decision) method")
+    return agent
+
+
 class BotAgent:
     """The engine's scripted bot (a baseline; its average placement against itself is 4.5)."""
 

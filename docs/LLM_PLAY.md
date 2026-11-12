@@ -146,6 +146,9 @@ live; they can reveal what that player holds). The history is also written to
 
 ## Writing your own agent
 
+The full contract (what an agent gets, what it returns, the action space, tools on copies,
+running it in batches and in the lobby) is in [Writing an agent](AGENT_INTERFACE.md).
+
 An agent is any object with `decide(decision) -> Plan`. The `Decision` holds the live `game`
 (read it or work on copies only), `seat`, `view`, `state_text`, `legal`, `actions_text`,
 `turn_log`, `feedback` and `notes`. The `Plan` holds the action indices, an optional new memo

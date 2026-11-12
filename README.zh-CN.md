@@ -132,6 +132,7 @@ pip install ".[bench]"
 | :--- | :--- |
 | [TavernGym](docs/TAVERNGYM.md) | 游戏 API、批量环境、观测、动作与配置。 |
 | [TavernBench](docs/TAVERNBENCH.md) | 数据布局、标签、评分、模型运行器与工具调用。 |
+| [LLM 对局](docs/LLM_PLAY.md) | 让大语言模型（直接作答或带工具的智能体）与脚本 bot 打完整对局。 |
 | [引擎架构](docs/ARCHITECTURE.md) | 引擎结构、接口与模块协作。 |
 | [内容覆盖](docs/CONTENT.md) | 已实现的随从、英雄、法术、饰品等。 |
 | [时空酒馆](docs/TIMEWARP.md) | 当前默认关闭的时空酒馆系统；部分英雄仍可进入。 |

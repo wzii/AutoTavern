@@ -148,6 +148,7 @@ pip install ".[bench]"
 | :--- | :--- |
 | [TavernGym](docs/TAVERNGYM.md) | Game APIs, batched environments, observations, actions, configuration and speed. |
 | [TavernBench](docs/TAVERNBENCH.md) | Dataset layout, labels, scoring, model runners, tool use and reproduction notes. |
+| [LLM play](docs/LLM_PLAY.md) | Full games played by a language model (bare or with tools) against the scripted bots. |
 | [Architecture](docs/ARCHITECTURE.md) | Engine structure, interfaces and how the components fit together. |
 | [Content coverage](docs/CONTENT.md) | Implemented minions, heroes, spells, trinkets and other game objects. |
 | [Timewarp](docs/TIMEWARP.md) | The Timewarped Tavern (off by default in 37.0.2; two heroes still visit it). |

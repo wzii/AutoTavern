@@ -52,6 +52,8 @@ python -X utf8 -m tavernbench.report --set data/eval --runs answers --systems MO
 `run_claude` uses the Claude Code CLI (installed and signed in separately), `run_jev` the Jev
 API, and `run_tools` gives an OpenAI-compatible model two tools over the task's state in
 TavernGym (`test_play`, `inspect`). Scoring and `report` need no model access.
+To have a model play complete games rather than answer single tasks, see
+[LLM play](LLM_PLAY.md).
 
 ## Score the released answers
 

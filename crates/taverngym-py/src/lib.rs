@@ -159,6 +159,20 @@ impl PyGame {
         check_seat(&self.g, p)?;
         Ok(py.detach(|| taverngym::debug::view(&self.g, p).to_string()))
     }
+    /// What seat `p` may know (`taverngym::debug::public_view`): like `view`, without the other
+    /// players' current and last boards and without combats `p` did not fight. `combats=False`
+    /// also leaves out the replays of `p`'s own combats.
+    #[pyo3(signature = (p, combats=true))]
+    fn public_view(&self, py: Python<'_>, p: usize, combats: bool) -> PyResult<String> {
+        check_seat(&self.g, p)?;
+        Ok(py.detach(|| {
+            if combats {
+                taverngym::debug::public_view(&self.g, p).to_string()
+            } else {
+                taverngym::debug::public_view_without_combats(&self.g, p).to_string()
+            }
+        }))
+    }
     /// Run a debug command given as JSON (`{"cmd": "set_player", ...}`); returns JSON.
     fn debug(&mut self, py: Python<'_>, cmd_json: &str) -> PyResult<String> {
         let cmd: taverngym::debug::DebugCmd = serde_json::from_str(cmd_json)

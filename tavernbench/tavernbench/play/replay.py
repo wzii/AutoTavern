@@ -31,7 +31,9 @@ def slim(c: dict) -> dict:
             "k": [KW_SHORT.get(k, k.replace("_", " ").title()) for k in c.get("keywords") or []
                   if k != "MAGNETIC"],
             "r": [r.title() for r in c.get("races") or []], "x": V._text(c),
-            "e": c.get("eid"), "p": c.get("price")}
+            "e": c.get("eid"), "p": c.get("price"),
+            "at": [{"n": a.get("name", "?"), "x": V._text(a), "g": a.get("kind") == "dark_gift"}
+                  for a in c.get("attached") or []]}
 
 
 def _reply(info: dict) -> dict:

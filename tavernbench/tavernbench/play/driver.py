@@ -202,8 +202,9 @@ class Match:
         # and the events, as a player watches it) at the first decision of the turn.
         combats = V.own_combats(g, self.seat, detail=not turn_log) \
             if v["phase"] == "recruit" else []
-        return Decision(g, self.seat, v, V.render(v, combats), legal, text, list(turn_log),
-                        feedback, notes)
+        # The lobby's card pool once per turn, at its first decision.
+        state = V.render(v, combats, pool=not turn_log and v["phase"] == "recruit")
+        return Decision(g, self.seat, v, state, legal, text, list(turn_log), feedback, notes)
 
     def _fallback(self, g) -> int:
         self.stats["fallbacks"] += 1

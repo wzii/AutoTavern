@@ -120,8 +120,12 @@ def card(c: dict, i: int | None = None, price=False) -> str:
         if kws:
             s += " [" + ", ".join(kws) + "]"
         att = c.get("attached") or []
-        if att:
-            s += " (magnetized: " + ", ".join(a.get("name", "?") for a in att) + ")"
+        gifts = [a for a in att if a.get("kind") == "dark_gift"]
+        mags = [a for a in att if a.get("kind") != "dark_gift"]
+        if mags:
+            s += " (magnetized: " + ", ".join(a.get("name", "?") for a in mags) + ")"
+        for a in gifts:
+            s += f" [Dark Gift {a.get('name', '?')}: {_text(a)}]"
         if price and c.get("price") is not None and c.get("price") != 3:
             s += f" (costs {c['price']})"
         if c.get("triple_need") and c.get("owned"):
@@ -161,7 +165,7 @@ def pending_options(me: dict) -> list[str]:
         return [names.get(t, f"entity #{t}") for t in pend.get("targets", [])]
     out = []
     kind = pend.get("kind")
-    for k, o in enumerate(pend.get("options", [])):
+    for k, o in enumerate(pend.get("options") or []):
         if kind == "hero":
             hp = o.get("hero_power") or {}
             s = f"{o.get('name', '?')} (Health {o.get('hp', '?')}, Armor {o.get('armor', 0)})"
@@ -171,7 +175,7 @@ def pending_options(me: dict) -> list[str]:
         elif kind == "choose_one":
             modes = re.split(r";\s*or\s+", re.sub(r"^.*?Choose One\s*-\s*", "", _text(o)))
             s = f"{o.get('name', '?')}, mode {k + 1}: " + (
-                modes[k] if len(modes) == len(pend["options"]) else _text(o))
+                modes[k] if len(modes) == len(pend.get("options") or []) else _text(o))
         elif kind == "trinket":
             s = card(o)  # its cost is what taking it costs this player now
         elif kind == "quest":
@@ -188,7 +192,173 @@ def pending_options(me: dict) -> list[str]:
     return out
 
 
-def render(v: dict, combats: list[dict] | None = None) -> str:
+# What a player learns from the game's help and experience, for the terms in its view.
+GLOSSARY = {
+    "Battlecry": "triggers when you play the card from your hand.",
+    "Deathrattle": "triggers when the minion dies.",
+    "Rally": "triggers whenever this minion attacks.",
+    "Avenge": "Avenge (X) triggers after X friendly minions die, then counts again.",
+    "Start of Combat": "triggers when combat begins, before the first attack.",
+    "Activate": "Activate (N): pay N Gold during your turn to trigger it, once per turn per "
+                "minion (the legal actions list it when you can).",
+    "Magnetic": "can be played onto a friendly Mech (magnetize): it merges into it, adding "
+                "its stats and effects.",
+    "Choose One": "when played, pick one of the two effects.",
+    "Discover": "choose one of several offered cards to get.",
+    "Tavern spell": "a spell bought from the Tavern; it goes to your hand and is cast from "
+                    "there.",
+    "Blood Gem": "a Quilboar spell: give a minion +1/+1 (improved by some cards).",
+    "Spellcraft": "at the start of your turn, get a temporary spell (used this turn or lost) "
+                  "from this minion.",
+    "Dark Gift": "a bonus effect attached to a minion; it stays with that minion.",
+    "Triple": "three copies of a minion merge into a Golden one (double stats); playing a "
+              "Golden minion gives a Triple Reward: Discover a minion from one Tier higher.",
+    "Free Refresh": "a refresh that costs no Gold.",
+    "Trinket": "a permanent effect for your hero, bought from an offer on fixed turns.",
+}
+_GLOSS_KEYS = {"Battlecry": r"Battlecr", "Deathrattle": r"Deathrattle", "Rally": r"\bRally",
+               "Avenge": r"\bAvenge", "Start of Combat": r"Start of Combat",
+               "Activate": r"\bActivate", "Magnetic": r"Magnetic|magnetiz",
+               "Choose One": r"Choose One", "Discover": r"\bDiscover",
+               "Tavern spell": r"Tavern spell", "Blood Gem": r"Blood Gem",
+               "Spellcraft": r"Spellcraft", "Dark Gift": r"Dark Gift", "Triple": r"Golden|triple",
+               "Free Refresh": r"free Refresh", "Trinket": r"[Tt]rinket"}
+
+
+def glossary(text: str) -> list[str]:
+    """Definitions of the game terms that appear in `text`."""
+    return [f"- {k}: {GLOSSARY[k]}" for k, pat in _GLOSS_KEYS.items() if re.search(pat, text)]
+
+
+@lru_cache(maxsize=1)
+def _names() -> tuple[dict, dict]:
+    """(card name -> normal card, family word -> normal cards whose name ends with it)."""
+    by_name, family = {}, {}
+    for c in _catalog().values():
+        if c.get("kind") in ("hero", "hero_power", "quest", "quest_reward") or not c.get("name"):
+            continue
+        if c.get("normal_id") and c["normal_id"] != c["id"]:
+            continue  # golden versions
+        prev = by_name.get(c["name"])
+        if prev is None or (c.get("in_pool") and not prev.get("in_pool")):
+            by_name[c["name"]] = c
+    for c in by_name.values():
+        words = c["name"].split()
+        if len(words) > 1 and c.get("kind") == "minion":
+            family.setdefault(words[-1], []).append(c)
+    family = {w: cs for w, cs in family.items() if len(cs) >= 2 and w not in by_name}
+    return by_name, family
+
+
+def _ref(c: dict) -> str:
+    if c.get("kind") != "minion":
+        return f"{c['name']} (spell) - {_text(c)}"
+    tribe = "/".join(r.title() for r in c.get("races") or []) or "no tribe"
+    return f"{c['name']} ({tribe}, tier {c.get('tier')}) {c.get('atk')}/{c.get('hp')} - {_text(c)}"
+
+
+def references(text: str, shown: set[str], limit: int = 14) -> list[str]:
+    """The cards that card texts in `text` name but that are not shown themselves: a card
+    by its name, or a family ("a random Chromadrake") by its members."""
+    by_name, family = _names()
+    out, seen = [], set()
+    tribes = {"Beast", "Demon", "Dragon", "Elemental", "Mech", "Murloc", "Naga", "Pirate",
+              "Quilboar", "Undead", "Aberration", "Minion", "Spell"}
+    for w, cs in family.items():
+        if w in tribes or w in seen:
+            continue
+        if re.search(rf"\b(?:random|a|an|another|\d+|two|three) (?:\w+ )?{re.escape(w)}s?\b",
+                     text):
+            seen.add(w)
+            out.append(f"- {w} (one of): " + "; ".join(_ref(c) for c in cs))
+    for name, c in by_name.items():
+        if len(out) >= limit:
+            break
+        if name in shown or len(name) < 4 or name in seen or name in GLOSSARY:
+            continue
+        if re.search(rf"\b{re.escape(name)}s?\b", text):
+            seen.add(name)
+            out.append(f"- {_ref(c)}")
+    return out[:limit]
+
+
+def lobby_pool(races: list[str]) -> dict:
+    """The Tavern's minions and spells in a lobby with these tribes, by tier."""
+    lobby = set(races)
+    tiers: dict[int, list[dict]] = {}
+    for c in _names()[0].values():
+        if not c.get("in_pool") or not c.get("implemented"):
+            continue
+        if c.get("kind") == "minion":
+            rs = set(c.get("races") or [])
+            if rs and "ALL" not in rs and not rs & lobby:
+                continue
+        elif c.get("kind") != "tavern_spell":
+            continue
+        tiers.setdefault(c.get("tier") or 0, []).append(c)
+    return {t: sorted(cs, key=lambda c: (c.get("kind") != "minion", c["name"]))
+            for t, cs in sorted(tiers.items())}
+
+
+def pool_text(races: list[str]) -> list[str]:
+    lines = ["Cards in this lobby's Tavern (minions with tribe and stats, then spells):"]
+    for t, cs in lobby_pool(races).items():
+        ms = [f"{c['name']} ({'/'.join(r.title() for r in c['races']) or '-'} "
+              f"{c['atk']}/{c['hp']})" for c in cs if c.get("kind") == "minion"]
+        sp = [c["name"] for c in cs if c.get("kind") != "minion"]
+        lines.append(f"  Tier {t}: " + "; ".join(ms) + (" | spells: " + "; ".join(sp)
+                                                          if sp else ""))
+    return lines
+
+
+def _card_texts(v: dict) -> list[str]:
+    """The texts of the cards in the seat's view (not their names)."""
+    me, out = v["me"], []
+
+    def add(c):
+        if isinstance(c, dict):
+            out.append(_text(c))
+            for a in c.get("attached") or []:
+                out.append(_text(a))
+    for z in ("board", "hand", "shop", "trinkets", "hero_powers", "rewards", "secrets"):
+        for c in me.get(z) or []:
+            add(c)
+    for o in (me.get("pending") or {}).get("options") or []:
+        add(o)
+        if isinstance(o, dict):
+            add(o.get("hero_power"))
+    for q in me.get("quests") or []:
+        add(q.get("quest"))
+        add(q.get("reward"))
+    for o in v.get("opponents") or []:
+        for c in o.get("seen_board") or []:
+            add(c)
+    return out
+
+
+def render(v: dict, combats: list[dict] | None = None, reference: bool = True,
+           pool: bool = False) -> str:
+    """The seat's view as text; with `reference`, also what a player knows from the game:
+    the mechanics and the cards its texts mention, and with `pool` the lobby's card pool."""
+    body = _render(v, combats)
+    if not reference or v.get("phase") == "hero_select":
+        return body
+    me = v["me"]
+    shown = {c.get("name") for z in ("board", "hand", "shop") for c in me[z]}
+    texts = "\n".join(_card_texts(v))
+    extra = []
+    refs = references(texts, shown)
+    if refs:
+        extra += ["Cards mentioned above:"] + refs
+    gl = glossary(body)
+    if gl:
+        extra += ["Game terms:"] + gl
+    if pool:
+        extra += pool_text(v.get("lobby_races") or [])
+    return body + "\n" + "\n".join(extra)
+
+
+def _render(v: dict, combats: list[dict] | None = None) -> str:
     """The seat's view as text."""
     me = v["me"]
     seat = v.get("seat", 0)

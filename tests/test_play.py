@@ -200,3 +200,89 @@ def test_prompt_shows_what_a_player_sees():
     assert "Their warband at the start:" in text and "Your warband at the start:" in text
     if v["me"].get("deity"):
         assert "Your Deity:" in text
+
+
+def _late_game(turn=9, seed=9):
+    g = taverngym.Game(seed=seed)
+    g.set_record_log(True)
+    while not (g.turn >= turn and g.needs_action(0)):
+        for p in range(8):
+            if g.needs_action(p):
+                g.step(p, g.bot_action(p))
+    while V.public_view(g, 0)["me"].get("pending"):  # a start-of-turn offer: take one
+        g.step(0, g.bot_action(0))
+    return g
+
+
+def test_lobby_state_with_an_activate_target_choice(tmp_path):
+    """Sky-hatch Runaway's Activate opens a target choice whose `options` the engine view
+    sets to null once cards have live texts: the page's state must still be served."""
+    from tavernbench import engine as E
+    from tavernbench.play.serve import Lobby
+    lobby = Lobby(9, [0], [], None, log_dir=tmp_path)
+    lobby.g = _late_game()
+    for c in ("BG36_242", "BG36_243"):  # Bronze Timewalker (Rally), Sky-hatch Runaway
+        E.dbg(lobby.g, cmd="clear_zone", p=0, zone="board") if c == "BG36_242" else None
+        E.add(lobby.g, 0, "board", c)
+    E.dbg(lobby.g, cmd="set_player", p=0, gold=5)
+    lobby.g.step(0, A.ACTIVATE + 1)
+
+    class LiveTexts:
+        """The game, with the view it gives once cards have live texts: the engine then
+        writes `options: null` into a target choice."""
+
+        def __init__(self, g):
+            self._g = g
+
+        def __getattr__(self, k):
+            return getattr(self._g, k)
+
+        def public_view(self, p, combats=True):
+            v = json.loads(self._g.public_view(p, combats))
+            if v["me"].get("pending"):
+                v["me"]["pending"]["options"] = None
+            return json.dumps(v)
+
+    lobby.g = LiveTexts(lobby.g)
+    st = lobby.state(0)
+    assert st["view"]["me"]["pending"]["kind"] == "target"
+    assert A.CHOOSE in [x["a"] for x in st["legal"]]
+    assert "Bronze Timewalker" in V.render(V.public_view(lobby.g, 0))
+    assert "Bronze Timewalker" in st["view"]["me"]["pending"]["options"][0]
+
+
+def test_dark_gift_effects_are_shown():
+    g = _late_game()
+    v = V.public_view(g, 0)
+    if not (v["me"].get("dark_gift") or {}).get("available"):
+        return
+    g.step(0, A.DARK_GIFT)
+    v = V.public_view(g, 0)
+    assert v["me"]["pending"]["kind"] == "discover"
+    opts = V.pending_options(v["me"])
+    assert opts and all("[Dark Gift " in o for o in opts)
+
+
+def test_referenced_cards_and_terms():
+    from tavernbench import engine as E
+    g = _late_game()
+    E.add(g, 0, "hand", "BG36_242")  # Bronze Timewalker: "Rally: Get a random Chromadrake."
+    v = V.public_view(g, 0)
+    text = V.render(v)
+    assert "Chromadrake (one of):" in text and "Blue Chromadrake" in text
+    assert "- Rally: triggers whenever this minion attacks." in text
+    assert "Cards in this lobby's Tavern" not in text
+    assert "Cards in this lobby's Tavern" in V.render(v, pool=True)
+
+
+def test_lobby_save_and_resume(tmp_path):
+    from tavernbench.play.serve import Lobby
+    a = Lobby(9, [0], [], None, log_dir=tmp_path)
+    a.g = _late_game(turn=4)
+    a.record({"seat": 0, "kind": "human", "turn": 4, "did": ["x"]})
+    a.save()
+    b = Lobby(1, [0], [], None, log_dir=tmp_path)
+    b.resume(tmp_path)
+    assert b.g.turn == a.g.turn and len(b.history) == 1
+    assert json.loads(b.g.state_json())["players"][0]["gold"] == \
+        json.loads(a.g.state_json())["players"][0]["gold"]

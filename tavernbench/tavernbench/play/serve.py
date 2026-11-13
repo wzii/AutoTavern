@@ -128,6 +128,45 @@ class Lobby:
     def bump(self):
         self.version += 1
 
+    def cards(self) -> dict:
+        """The lobby's card pool by tier, with texts, and the game terms (for the page)."""
+        races = json.loads(self.g.public_view(0, False)).get("lobby_races") or []
+        pool = {t: [{**slim(c), "kind": c.get("kind")} for c in cs]
+                for t, cs in V.lobby_pool(races).items()}
+        other = sorted((c for c in V._names()[0].values() if not c.get("in_pool")
+                        and c.get("implemented")
+                        and c.get("kind") in ("minion", "spell", "tavern_spell")),
+                       key=lambda c: c["name"])
+        return {"tribes": [r.title() for r in races], "pool": pool, "terms": V.GLOSSARY,
+                "other": [{**slim(c), "kind": c.get("kind")} for c in other]}
+
+    def save(self):
+        """The game and the lobby's memory, so a restarted server can resume it."""
+        if not self.log:
+            return
+        with self.lock:
+            snap = {"seed": self.seed, "game": json.loads(self.g.state_json()),
+                    "llm": {p: {"notes": s.notes[0], "turn": s.turn, "turn_log": s.turn_log}
+                            for p, s in self.llm.items()}}
+        path = Path(self.log.name).with_name("lobby.json")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(snap))
+        tmp.replace(path)
+
+    def resume(self, log_dir: Path):
+        snap = json.loads((log_dir / "lobby.json").read_text())
+        self.g = _core.Game.from_json(json.dumps(snap["game"]))
+        self.g.set_record_log(True)
+        for p, m in snap.get("llm", {}).items():
+            s = self.llm.get(int(p))
+            if s:
+                s.notes[0], s.turn, s.turn_log = m["notes"], m["turn"], m["turn_log"]
+        hist = log_dir / "history.jsonl"
+        if hist.exists():
+            with open(hist, encoding="utf-8") as f:
+                self.history = [json.loads(line) for line in f if line.strip()]
+        self.bump()
+
     def record(self, entry: dict):
         """One step of a seat's history: shown in the page and appended to history.jsonl."""
         entry = {"i": len(self.history), "name": self.name(entry["seat"]),
@@ -161,7 +200,15 @@ class Lobby:
 
     def run(self):
         """Step the bots and start language-model decisions until the game ends."""
+        saved = -1
         while True:
+            if self.version != saved:
+                saved = self.version
+                try:
+                    self.save()
+                except Exception:  # noqa: BLE001 - a failed snapshot must not stop the game
+                    import traceback
+                    traceback.print_exc()
             with self.lock:
                 if self.g.is_over():
                     self.bump()
@@ -198,7 +245,7 @@ class Lobby:
             if pend:
                 opts = V.pending_options(me)
                 cards = [slim(o) if isinstance(o, dict) and pend.get("kind") in (
-                    "discover", "timewarp") else None for o in pend.get("options", [])]
+                    "discover", "timewarp") else None for o in pend.get("options") or []]
                 pending = {"kind": pend.get("kind"), "options": opts, "cards": cards,
                            "source": (pend.get("source") or {}).get("name"),
                            "targets": pend.get("targets") or []}
@@ -308,21 +355,28 @@ def handler(lobby: Lobby, page: str, chooser: str):
                 p = min(lobby.humans) if len(lobby.humans) == 1 else -1
             return p if p in lobby.humans else None
 
+        def _route(self, u):
+            """The API route of a request under any path prefix (a tunnel or a proxy may
+            publish the game at /tavern/...); None for the page."""
+            i = u.path.find("/api/")
+            return u.path[i:] if i >= 0 else None
+
         def do_GET(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
-            if u.path == "/":
+            route = self._route(u)
+            if route is None:
                 if "seat" not in q and len(lobby.humans) > 1:
                     return self._send(200, chooser, "text/html")
                 return self._send(200, page, "text/html")
-            if u.path == "/api/history":
+            if route == "/api/history":
                 p = self._seat(q)
                 if p is None:
                     return self._send(404, json.dumps({"error": "no such human seat"}))
                 after = int((q.get("after") or ["-1"])[0])
                 return self._send(200, json.dumps(lobby.history_for(p, after),
                                                   ensure_ascii=False))
-            if u.path == "/api/state":
+            if route == "/api/state":
                 p = self._seat(q)
                 if p is None:
                     return self._send(404, json.dumps({"error": "no such human seat"}))
@@ -330,12 +384,19 @@ def handler(lobby: Lobby, page: str, chooser: str):
                 if since and since.isdigit() and int(since) == lobby.version:
                     return self._send(200, json.dumps({"version": lobby.version,
                                                        "same": True}))
-                return self._send(200, json.dumps(lobby.state(p)))
+                try:
+                    return self._send(200, json.dumps(lobby.state(p)))
+                except Exception as e:  # noqa: BLE001 - shown on the page, the game goes on
+                    import traceback
+                    traceback.print_exc()
+                    return self._send(500, json.dumps({"error": f"server error: {e!r}"}))
+            if route == "/api/cards":
+                return self._send(200, json.dumps(lobby.cards(), ensure_ascii=False))
             return self._send(404, json.dumps({"error": "not found"}))
 
         def do_POST(self):
             u = urlparse(self.path)
-            if u.path != "/api/act":
+            if self._route(u) != "/api/act":
                 return self._send(404, json.dumps({"error": "not found"}))
             n = int(self.headers.get("Content-Length") or 0)
             try:
@@ -346,7 +407,10 @@ def handler(lobby: Lobby, page: str, chooser: str):
             err = lobby.act(p, a)
             if err:
                 return self._send(409, json.dumps({"error": err}))
-            return self._send(200, json.dumps(lobby.state(p)))
+            try:
+                return self._send(200, json.dumps(lobby.state(p)))
+            except Exception as e:  # noqa: BLE001
+                return self._send(500, json.dumps({"error": f"server error: {e!r}"}))
 
     return H
 
@@ -370,6 +434,8 @@ def main():
     ap.add_argument("--show-thoughts", action="store_true",
                     help="show each model seat's latest reasoning in the lobby (it can "
                          "reveal what that player holds)")
+    ap.add_argument("--resume", default="",
+                    help="a lobby's log directory: continue its game where it was saved")
     ap.add_argument("--log-dir", default="",
                     help="where history.jsonl goes (default runs/lobby/<seed>-<time>)")
     ap.add_argument("--turn-cap", type=int, default=40)
@@ -407,9 +473,13 @@ def main():
 
     label = a.label or ((a.agent_class.split(":")[-1] if a.llm_agent == "custom" else
                          (a.model or "AI").replace("-", " ").title()) + " (AI)")
-    log_dir = Path(a.log_dir or f"runs/lobby/{seed}-{time.strftime('%Y%m%d-%H%M%S')}")
+    log_dir = Path(a.resume or a.log_dir
+                   or f"runs/lobby/{seed}-{time.strftime('%Y%m%d-%H%M%S')}")
     lobby = Lobby(seed, humans, llm, make_agent, json.loads(a.config) if a.config else None,
                   a.turn_cap, a.retries, a.max_plan, a.show_thoughts, label, log_dir)
+    if a.resume:
+        lobby.resume(log_dir)
+        print(f"resumed {log_dir} at turn {lobby.g.turn}")
     system = AG.SYSTEM + (AG.TOOL_NOTE.format(calls=a.calls, sims=a.sims)
                           if a.llm_agent == "tools" else "")
     with open(log_dir / "run.json", "w") as f:
@@ -419,7 +489,7 @@ def main():
                    "system_prompt": system if llm and a.llm_agent != "custom" else None,
                    "time": time.strftime("%Y-%m-%dT%H:%M:%S")}, f, indent=1)
     page = Path(__file__).with_name("play_ui.html").read_text(encoding="utf-8")
-    links = "".join(f'<li><a href="/?seat={p}">Seat {p}</a></li>' for p in sorted(humans))
+    links = "".join(f'<li><a href="?seat={p}">Seat {p}</a></li>' for p in sorted(humans))
     chooser = (f"<!doctype html><meta charset=utf-8><title>Choose your seat</title>"
                f"<body style='font:16px system-ui;padding:24px'><h1>Choose your seat</h1>"
                f"<ul>{links}</ul></body>")

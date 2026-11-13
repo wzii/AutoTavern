@@ -12,7 +12,7 @@
   --line: #ddd2c2; --accent: #8a5a12; --accent-ink: #fffaf0; --accent-soft: #f2e3c8;
   --win: #2f7d4f; --loss: #b4442f; --tie: #8a7f72; --gold: #c9971f; --shield: #3fa7c9;
   --atk: #d0482f; --def: #e3a12c; --card: #fdf9f2; --spell: #eee8f5; --chip: #ece4d6;
-  --ok: #2f7d4f; --slot: #c9971f;
+  --ok: #2f7d4f; --slot: #c9971f; --gift: #7a3fb0;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -20,7 +20,7 @@
     --line: #3a3329; --accent: #e0aa50; --accent-ink: #1a1408; --accent-soft: #3b301e;
     --win: #5cc188; --loss: #ea7a62; --tie: #a59a8b; --gold: #e2b84a; --shield: #5ec4e6;
     --atk: #f06a50; --def: #f0b54a; --card: #29241d; --spell: #2b2634; --chip: #2e2820;
-    --ok: #5cc188; --slot: #e2b84a; color-scheme: dark;
+    --ok: #5cc188; --slot: #e2b84a; --gift: #c08cf0; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
@@ -28,7 +28,7 @@
   --line: #3a3329; --accent: #e0aa50; --accent-ink: #1a1408; --accent-soft: #3b301e;
   --win: #5cc188; --loss: #ea7a62; --tie: #a59a8b; --gold: #e2b84a; --shield: #5ec4e6;
   --atk: #f06a50; --def: #f0b54a; --card: #29241d; --spell: #2b2634; --chip: #2e2820;
-  --ok: #5cc188; --slot: #e2b84a; color-scheme: dark;
+  --ok: #5cc188; --slot: #e2b84a; --gift: #c08cf0; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -44,6 +44,8 @@ header .hero { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
 .coins { display: inline-flex; gap: 3px; margin-left: 4px; }
 .coin { width: 10px; height: 10px; border-radius: 50%; background: var(--gold); }
 .coin.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line); }
+.tribes { font-size: 12.5px; color: var(--muted); background: var(--chip); border-radius: 999px; padding: 2px 10px; }
+button.ghost { padding: 3px 10px; font-size: 13px; }
 .status { margin-left: auto; color: var(--muted); font-size: 13px; }
 main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; padding-block: 0 28px;
   align-items: start; }
@@ -68,6 +70,9 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; pa
 .card.atk { box-shadow: 0 0 0 3px var(--atk); transform: translateY(-4px); }
 .card.def { box-shadow: 0 0 0 3px var(--def); }
 .card.dim { opacity: .5; }
+.card.gift { box-shadow: inset 0 0 0 1.5px var(--gift); }
+.card .giftline { font-size: 9.5px; font-weight: 650; color: var(--gift); line-height: 1.15; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; }
 .card.frozen::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
   background: linear-gradient(135deg, transparent 40%, color-mix(in srgb, var(--shield) 28%, transparent));
   pointer-events: none; }
@@ -155,6 +160,15 @@ details.seen summary { cursor: pointer; font-size: 12px; color: var(--muted); gr
 .he pre { white-space: pre-wrap; word-break: break-word; font: 11px/1.4 ui-monospace, Menlo, monospace;
   background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; max-height: 260px; overflow: auto; }
 .he .lab { font-size: 11px; font-weight: 600; margin-top: 4px; }
+.cardsdlg { max-width: 760px; }
+.cdhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+#cdq { width: 100%; font: inherit; padding: 8px 10px; margin: 10px 0; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); }
+.cdtier .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 10px 0 4px; }
+.cdrows { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+.cdrow { font-size: 12.5px; background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; min-width: 0; }
+.terms { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+.terms dt { font-weight: 650; } .terms dd { margin: 0; color: var(--muted); }
 .toast { position: fixed; bottom: max(18px, env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 10px; z-index: 40; }
 .final { font-size: 15px; } .final li { margin: 3px 0; } .final .me { font-weight: 700; color: var(--accent); }
@@ -180,9 +194,11 @@ details.seen summary { cursor: pointer; font-size: 12px; color: var(--muted); gr
 <div id="layer"></div>
 <script>
 const SEAT = new URLSearchParams(location.search).get("seat");
+const BASE = location.pathname.replace(/\/+$/, "");  // the page may be published under a path
 const A = {END: 0, REFRESH: 1, FREEZE: 2, UPGRADE: 3, HP: 4, DARK: 6, CANCEL: 7, BUY: 8, SELL: 16,
   ACT: 23, CHOOSE: 30, PLAY: 46, MAG: 126, MOVE: 196, NPOS: 8, NB: 7};
 let S = null, version = "", sel = null, busy = false, frame = 0, timer = null, shownCombat = null;
+let lastErr = "", CARDS = null;
 let endArmed = null, HIST = [], histLast = -1, histBusy = false, histHidden = false;
 const sig = {};
 function changed(part, value) { const k = JSON.stringify(value); if (sig[part] === k) return false; sig[part] = k; return true; }
@@ -194,15 +210,16 @@ const label = (a) => (S.legal.find((x) => x.a === a) || {}).label || "";
 async function poll() {
   try {
     const q = new URLSearchParams({since: version}); if (SEAT !== null) q.set("seat", SEAT);
-    const r = await fetch("/api/state?" + q); const d = await r.json();
-    if (d.error) { $("#table").innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+    const r = await fetch(BASE + "/api/state?" + q); const d = await r.json();
+    if (d.error) { if (d.error !== lastErr) toast(d.error); lastErr = d.error; return; }
+    lastErr = "";
     if (!d.same) { S = d; version = d.version; render(); }
   } catch (e) { /* the server is restarting or gone: keep trying */ }
 }
 async function act(a) {
   if (busy) return; busy = true; closeMenu();
   try {
-    const r = await fetch("/api/act", {method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await fetch(BASE + "/api/act", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({seat: S.seat, action: a})});
     const d = await r.json();
     if (d.error) toast(d.error); else { S = d; version = d.version; sel = null; render(); }
@@ -219,13 +236,17 @@ function card(c, opts = {}) {
   if (opts.dim) cls.push("dim"); if (opts.frozen) cls.push("frozen");
   if (opts.hl && opts.hl.atk.has(c.e)) cls.push("atk"); if (opts.hl && opts.hl.def.has(c.e)) cls.push("def");
   const kws = c.k.filter((k) => k !== "Taunt" && k !== "Divine Shield");
-  const tip = `${c.g ? "Golden " : ""}${c.n}${c.s ? "" : ` (${c.r.join("/") || "no tribe"}, tier ${c.t}) ${c.a}/${c.h}`}${c.k.length ? " [" + c.k.join(", ") + "]" : ""}${c.x ? "\n" + c.x : ""}`;
+  const att = c.at || [], gifts = att.filter((x) => x.g);
+  const tip = `${c.g ? "Golden " : ""}${c.n}${c.s ? "" : ` (${c.r.join("/") || "no tribe"}, tier ${c.t}) ${c.a}/${c.h}`}${c.k.length ? " [" + c.k.join(", ") + "]" : ""}${c.x ? "\n" + c.x : ""}`
+    + att.map((x) => `\n${x.g ? "Dark Gift" : "Magnetized"} ${x.n}: ${x.x}`).join("");
+  if (gifts.length) cls.push("gift");
   const bottom = c.s ? (c.p != null ? `<div class="pr">${c.p} gold</div>` : "")
     : `<div class="st"><span class="a">${c.a}</span><span class="h">${c.h}</span></div>`;
   const attrs = opts.attrs || "";
   return `<div class="${cls.join(" ")}" title="${esc(tip)}" ${attrs} ${opts.click ? 'tabindex="0" role="button"' : ""}>
     <div class="tier">${c.s ? "Spell" : "Tier " + c.t}${c.r.length ? " · " + esc(c.r.join("/")) : ""}</div>
-    <div class="nm">${esc(c.n)}</div>${kws.length ? `<div class="kw">${esc(kws.join(", "))}</div>` : ""}${bottom}</div>`;
+    <div class="nm">${esc(c.n)}</div>${kws.length ? `<div class="kw">${esc(kws.join(", "))}</div>` : ""}
+    ${gifts.map((x) => `<div class="giftline">✦ ${esc(x.n)}</div>`).join("")}${bottom}</div>`;
 }
 
 function render() {
@@ -240,8 +261,11 @@ function render() {
     <span class="stat"><span class="k">Tier</span><span class="v">${m.tier}</span></span>
     <span class="stat"><span class="k">Gold</span><span class="v">${m.gold}/${m.max_gold}</span><span class="coins">${coins}</span></span>
     <span class="stat"><span class="k">Turn</span><span class="v">${v.turn}</span></span>
+    <span class="tribes" title="Tribes in this lobby">${esc((v.lobby_races || []).map((r) => r[0] + r.slice(1).toLowerCase()).join(" · "))}</span>
+    <button id="cardsbtn" class="ghost">Cards</button>
     <span class="status">${S.over ? "Game over" : !m.alive ? `Eliminated · place ${m.placement}` :
       S.legal.length ? "Your move" : S.waiting.length ? "Waiting for " + esc(S.waiting.join(", ")) : "Combat…"}</span>`;
+  const cb = $("#cardsbtn"); if (cb) cb.onclick = (e) => { e.stopPropagation(); openCards(); };
   if (changed("table", [v, S.legal, sel, endArmed])) renderTable(L);
   if (changed("lobby", S.lobby)) renderLobby();
   if (changed("combat", S.combats.map((c) => c.turn + ":" + c.opponent))) renderCombat();
@@ -305,8 +329,10 @@ function boardActs(i, L) {
   const out = [];
   if (L.has(A.SELL + i)) out.push([A.SELL + i, "Sell (+1 gold)"]);
   if (L.has(A.ACT + i)) out.push([A.ACT + i, "Activate"]);
-  if (i > 0 && L.has(A.MOVE + i * A.NB + i - 1)) out.push([A.MOVE + i * A.NB + i - 1, "Move left"]);
-  if (L.has(A.MOVE + i * A.NB + i + 1)) out.push([A.MOVE + i * A.NB + i + 1, "Move right"]);
+  for (let j = 0; j < 7; j++) {
+    const a = A.MOVE + i * A.NB + j;
+    if (j !== i && L.has(a)) out.push([a, `Move to position ${j + 1}${j === 0 ? " (leftmost, attacks first)" : ""}`]);
+  }
   return out;
 }
 function handActs(h, L) {
@@ -425,7 +451,7 @@ function renderDialog(L) {
     const useCards = p.cards.some((c) => c);
     const opts = p.options.map((t, k) => {
       const a = A.CHOOSE + k, ok = L.has(a);
-      if (useCards && p.cards[k]) return `<button class="opt optcard" data-a="${a}" ${ok ? "" : "disabled"}>${card(p.cards[k])}<span class="txt">${esc(p.cards[k].x)}</span></button>`;
+      if (useCards && p.cards[k]) return `<button class="opt optcard" data-a="${a}" ${ok ? "" : "disabled"}>${card(p.cards[k])}<span class="txt">${esc(p.cards[k].x)}</span>${(p.cards[k].at || []).map((x) => `<span class="txt"><b>${x.g ? "Dark Gift" : "Magnetized"} ${esc(x.n)}:</b> ${esc(x.x)}</span>`).join("")}</button>`;
       return `<button class="opt" data-a="${a}" ${ok ? "" : "disabled"}>${esc(t)}</button>`;
     }).join("");
     html = `<div class="overlay"><div class="dialog" role="dialog" aria-modal="true"><h3>${esc(titles[p.kind] || "Choose")}</h3>
@@ -438,11 +464,40 @@ function renderDialog(L) {
   $("#layer .dialog button:not(:disabled)")?.focus();
 }
 
+async function openCards() {
+  if (!CARDS) { try { CARDS = await (await fetch(BASE + "/api/cards")).json(); } catch (e) { toast("Could not load the cards"); return; } }
+  const box = document.createElement("div"); box.className = "overlay"; box.id = "cardsov";
+  box.innerHTML = `<div class="dialog cardsdlg" role="dialog" aria-modal="true" aria-label="Cards in this lobby">
+    <div class="cdhead"><h3>Cards in this lobby</h3><button id="cdclose" aria-label="Close">Close</button></div>
+    <div class="hint">Tribes: ${esc(CARDS.tribes.join(", "))}. Hover a card for its text.</div>
+    <input id="cdq" type="search" placeholder="Search a name, tribe or text (e.g. Chromadrake, Rally)" autocomplete="off">
+    <div id="cdlist"></div>
+    <h3 style="margin-top:14px">Game terms</h3>
+    <dl class="terms">${Object.entries(CARDS.terms).map(([k, d]) => `<dt>${esc(k)}</dt><dd>${esc(d)}</dd>`).join("")}</dl></div>`;
+  document.body.appendChild(box);
+  const group = (title, m) => !m.length ? "" : `<div class="cdtier"><div class="lbl">${esc(title)}</div><div class="cdrows">${m.map((c) =>
+    `<div class="cdrow"><b>${esc(c.n)}</b> <span class="hint">${c.s ? "spell" : esc(c.r.join("/") || "no tribe") + " · tier " + c.t + " · " + c.a + "/" + c.h}</span><div>${esc(c.x)}</div></div>`).join("")}</div></div>`;
+  const draw = () => {
+    const q = $("#cdq").value.trim().toLowerCase();
+    const hit = (c) => !q || (c.n + " " + c.r.join(" ") + " " + c.x).toLowerCase().includes(q);
+    $("#cdlist").innerHTML = Object.entries(CARDS.pool).map(([t, cs]) => {
+      const m = cs.filter(hit); if (!m.length) return "";
+      return group(`Tier ${t}`, m);
+    }).join("") + (q ? group("Made by card effects (not sold in the Tavern)", (CARDS.other || []).filter(hit).slice(0, 40)) : "")
+      || `<div class="hint">No card matches.</div>`;
+  };
+  $("#cdq").oninput = draw; draw(); $("#cdq").focus();
+  const close = () => box.remove();
+  $("#cdclose").onclick = close;
+  box.onclick = (e) => { if (e.target === box) close(); };
+  box.querySelector(".dialog").onclick = (e) => e.stopPropagation();
+  box.onkeydown = (e) => { if (e.key === "Escape") close(); };
+}
 async function loadHistory() {
   if (histBusy) return; histBusy = true;
   try {
     const q = new URLSearchParams({after: histLast}); if (SEAT !== null) q.set("seat", SEAT);
-    const d = await (await fetch("/api/history?" + q)).json();
+    const d = await (await fetch(BASE + "/api/history?" + q)).json();
     if (d.items) { HIST.push(...d.items); histLast = d.last; histHidden = d.hidden; renderHistory(); }
   } catch (e) { /* retry on the next update */ } finally { histBusy = false; }
 }

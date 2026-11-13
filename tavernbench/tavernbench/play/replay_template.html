@@ -178,13 +178,15 @@ function card(c, hl) {
   if (hl && hl.atk.has(c.e)) cls.push("atk");
   if (hl && hl.def.has(c.e)) cls.push("def");
   const kws = c.k.filter((k) => k !== "Taunt" && k !== "Divine Shield");
-  const tip = `${c.g ? "Golden " : ""}${c.n}${c.s ? "" : ` (${c.r.join("/") || "no tribe"}, tier ${c.t}) ${c.a}/${c.h}`}${c.k.length ? " [" + c.k.join(", ") + "]" : ""}${c.x ? "\n" + c.x : ""}`;
+  const att = c.at || [], gifts = att.filter((x) => x.g);
+  const tip = `${c.g ? "Golden " : ""}${c.n}${c.s ? "" : ` (${c.r.join("/") || "no tribe"}, tier ${c.t}) ${c.a}/${c.h}`}${c.k.length ? " [" + c.k.join(", ") + "]" : ""}${c.x ? "\n" + c.x : ""}`
+    + att.map((x) => `\n${x.g ? "Dark Gift" : "Magnetized"} ${x.n}: ${x.x}`).join("");
   const bottom = c.s ? (c.p != null ? `<div class="pr">${c.p}g</div>` : "")
     : `<div class="st"><span class="a">${c.a}</span><span class="h">${c.h}</span></div>`;
   return `<div class="${cls.join(" ")}" title="${esc(tip)}">
     <div class="tier">${c.s ? "Spell" : "T" + c.t}${c.r.length ? " · " + esc(c.r.join("/")) : ""}</div>
     <div class="nm">${esc(c.n)}</div>${kws.length ? `<div class="kw">${esc(kws.join(", "))}</div>` : ""}
-    ${bottom}</div>`;
+    ${gifts.map((x) => `<div class="kw" style="color:var(--accent)">✦ ${esc(x.n)}</div>`).join("")}${bottom}</div>`;
 }
 const row = (cards, hl) => cards.length ? `<div class="row">${cards.map((c) => card(c, hl)).join("")}</div>`
   : `<div class="row"><div class="empty">empty</div></div>`;

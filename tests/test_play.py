@@ -286,3 +286,30 @@ def test_lobby_save_and_resume(tmp_path):
     assert b.g.turn == a.g.turn and len(b.history) == 1
     assert json.loads(b.g.state_json())["players"][0]["gold"] == \
         json.loads(a.g.state_json())["players"][0]["gold"]
+
+
+def test_human_page_text_is_what_the_model_gets(tmp_path):
+    """The lobby page shows the human the same text the driver gives a model for that seat."""
+    from tavernbench.play.serve import Lobby
+    lobby = Lobby(9, [0], [], None, log_dir=tmp_path)
+    lobby.g = _late_game()
+    d = Match(AG.BotAgent(), seed=9)._decision(lobby.g, [], "", "")
+    assert lobby.state(0)["state_text"] == V.render(
+        V.public_view(lobby.g, 0), V.own_combats(lobby.g, 0, detail=True))
+    # the driver's first decision of a turn adds only the lobby's card pool to that text
+    assert d.state_text.startswith(lobby.state(0)["state_text"].split("\nCards mentioned")[0])
+
+
+def test_hand_and_lobby_details_are_in_the_text():
+    g = _late_game()
+    v = V.public_view(g, 0)
+    me = v["me"]
+    assert len(me["hand"]) >= 2
+    me["hand"][0]["locked"] = 2
+    me["hand"][0]["link"], me["hand"][1]["link"] = me["hand"][1]["hid"], me["hand"][0]["hid"]
+    me["gold_next_turn"] = 1
+    text = V.render(v)
+    assert "(locked: playable in 2 turns)" in text
+    assert "(hand 0 and hand 1 are linked: playing one discards the other)" in text
+    assert "You get 1 extra Gold next turn." in text
+    assert any(o.get("last_damage") for o in v["opponents"]) and "last combat: " in text

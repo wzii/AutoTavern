@@ -126,14 +126,32 @@ def card(c: dict, i: int | None = None, price=False) -> str:
             s += " (magnetized: " + ", ".join(a.get("name", "?") for a in mags) + ")"
         for a in gifts:
             s += f" [Dark Gift {a.get('name', '?')}: {_text(a)}]"
-        if price and c.get("price") is not None and c.get("price") != 3:
+        if price and c.get("costs_health"):
+            s += f" (costs {c.get('price')} Health instead of Gold)"
+        elif price and c.get("price") is not None and c.get("price") != 3:
             s += f" (costs {c['price']})"
+        if c.get("ticket"):
+            s += " (ticket)"
+        if (c.get("shield_max") or 0) > 1 and "DIVINE_SHIELD" in (c.get("keywords") or []):
+            s += f" (Divine Shield: {c.get('shield_hits')}/{c.get('shield_max')} hits left)"
+        if c.get("activations"):
+            s += " (Activate used this turn)"
         if c.get("triple_need") and c.get("owned"):
             s += f" (you own {c['owned']}/{c['triple_need']} for a triple)"
     if c.get("frozen"):
         s += " (frozen)"
     if c.get("temporary"):
         s += " (temporary: leaves your hand at the end of the turn)"
+    if c.get("held"):
+        s += " (held: not playable until its condition is met, see your Hero Power)"
+    elif c.get("locked"):
+        s += f" (locked: playable in {c['locked']} turn{'s' if c['locked'] > 1 else ''})"
+    if c.get("unplayable"):
+        s += " (cannot be played)"
+    if c.get("combined"):
+        s += " (both Choose One effects)"
+    if c.get("hid") is not None and c.get("golden") and c.get("triple_reward"):
+        s += " (gives a Triple Reward when played)"
     t = _text(c)
     return s + (f" - {t}" if t else "")
 
@@ -257,28 +275,38 @@ def _ref(c: dict) -> str:
     return f"{c['name']} ({tribe}, tier {c.get('tier')}) {c.get('atk')}/{c.get('hp')} - {_text(c)}"
 
 
+@lru_cache(maxsize=1)
+def _name_pattern():
+    names = sorted((n for n in _names()[0] if len(n) >= 4 and n not in GLOSSARY),
+                   key=len, reverse=True)
+    return re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")s?\b")
+
+
+@lru_cache(maxsize=1)
+def _family_pattern():
+    tribes = {"Beast", "Demon", "Dragon", "Elemental", "Mech", "Murloc", "Naga", "Pirate",
+              "Quilboar", "Undead", "Aberration", "Minion", "Spell"}
+    words = sorted((w for w in _names()[1] if w not in tribes), key=len, reverse=True)
+    return re.compile(r"\b(?:random|a|an|another|\d+|two|three) (?:\w+ )?("
+                      + "|".join(re.escape(w) for w in words) + r")s?\b")
+
+
 def references(text: str, shown: set[str], limit: int = 14) -> list[str]:
     """The cards that card texts in `text` name but that are not shown themselves: a card
     by its name, or a family ("a random Chromadrake") by its members."""
     by_name, family = _names()
     out, seen = [], set()
-    tribes = {"Beast", "Demon", "Dragon", "Elemental", "Mech", "Murloc", "Naga", "Pirate",
-              "Quilboar", "Undead", "Aberration", "Minion", "Spell"}
-    for w, cs in family.items():
-        if w in tribes or w in seen:
-            continue
-        if re.search(rf"\b(?:random|a|an|another|\d+|two|three) (?:\w+ )?{re.escape(w)}s?\b",
-                     text):
+    for m in _family_pattern().finditer(text):
+        w = m.group(1)
+        if w not in seen:
             seen.add(w)
-            out.append(f"- {w} (one of): " + "; ".join(_ref(c) for c in cs))
-    for name, c in by_name.items():
-        if len(out) >= limit:
-            break
-        if name in shown or len(name) < 4 or name in seen or name in GLOSSARY:
+            out.append(f"- {w} (one of): " + "; ".join(_ref(c) for c in family[w]))
+    for m in _name_pattern().finditer(text):
+        name = m.group(1)
+        if name in shown or name in seen:
             continue
-        if re.search(rf"\b{re.escape(name)}s?\b", text):
-            seen.add(name)
-            out.append(f"- {_ref(c)}")
+        seen.add(name)
+        out.append(f"- {_ref(by_name[name])}")
     return out[:limit]
 
 
@@ -423,19 +451,51 @@ def _render(v: dict, combats: list[dict] | None = None) -> str:
         if bb and bb.get("available"):
             lines.append(f"Buddy available: {(bb.get('card') or {}).get('name')} for "
                          f"{bb.get('price')} Gold - {_text(bb.get('card') or {})}")
+        if me.get("gold_next_turn"):
+            lines.append(f"You get {me['gold_next_turn']} extra Gold next turn.")
+        if me.get("chronum_balance"):
+            lines.append(f"Chronum: {me['chronum_balance']}.")
+        if bb and not bb.get("available") and bb.get("card"):
+            lines.append(f"Buddy: {bb['card'].get('name')} (price {bb.get('price')} Gold, not "
+                         f"available yet) - {_text(bb['card'])}")
         # only what happened to this player (the others' events are not on its screen)
         ev = [_event(x, seat) for x in me.get("turn_events") or []
               if re.search(rf"\bp{seat}\b", x)]
         if ev:
             lines.append("At the start of this turn: " + "; ".join(ev) + ".")
         lines += zone("Your warband (left to right; attacks in this order)", me["board"])
-        lines += zone(f"Your hand ({len(me['hand'])}/{me.get('hand_limit', 10)})", me["hand"])
+        hand = me["hand"]
+        lines += zone(f"Your hand ({len(hand)}/{me.get('hand_limit', 10)})", hand)
+        pos = {c.get("hid"): i for i, c in enumerate(hand)}
+        for i, c in enumerate(hand):
+            if c.get("link") and c["link"] in pos and i < pos[c["link"]]:
+                lines.append(f"  (hand {i} and hand {pos[c['link']]} are linked: playing one "
+                             "discards the other)")
+        groups = {}
+        for i, c in enumerate(hand):
+            if c.get("group"):
+                groups.setdefault(c["group"], []).append(i)
+        for idx in groups.values():
+            left = hand[idx[0]].get("group_left")
+            lines.append(f"  (hand {', '.join(map(str, idx))} are a group: play {left} of them, "
+                         "the rest are discarded)")
+        if me.get("hand_queue"):
+            lines.append("Waiting for hand space: " + "; ".join(card(c) for c in me["hand_queue"]))
         lines += zone("Tavern", me["shop"], price=True)
     pend = me.get("pending")
     if pend:
         src = (pend.get("source") or {}).get("name")
+        cast = next((f"hand {i}: {c.get('name')}" for i, c in enumerate(me["hand"])
+                     if me.get("casting") is not None and c.get("hid") == me.get("casting")), None)
+        terms = []
+        if cast:
+            terms.append(f"casting {cast}")
+        if pend.get("free"):
+            terms.append("free")
+        if pend.get("replace"):
+            terms.append(f"replaces your {pend['replace'].get('name')}")
         lines.append(f"PENDING CHOICE ({pend.get('kind')}" + (f", from {src}" if src else "")
-                     + "): you must choose one of")
+                     + "".join(f", {t}" for t in terms) + "): you must choose one of")
         lines += [f"  {k}: {s}" for k, s in enumerate(pending_options(me))]
         if me.get("cancellable"):
             lines.append("  (or back out with the cancel action)")
@@ -456,6 +516,8 @@ def _render(v: dict, combats: list[dict] | None = None) -> str:
             s = (f"  player {o['id']}: {hero}, Health {o['health']}"
                  + (f"+{o['armor']}" if o.get("armor") else "") + f", tier {o['tier']}"
                  + (f", win streak {o['win_streak']}" if o.get("win_streak") else "")
+                 + (f", last combat: {'dealt' if o['last_damage'] > 0 else 'took'} "
+                    f"{abs(o['last_damage'])} damage" if o.get("last_damage") else "")
                  + (f", last warband {lw.get('size')} minions ({tribe})" if lw.get("size")
                     else ""))
             if tags:

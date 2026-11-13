@@ -33,7 +33,16 @@ def slim(c: dict) -> dict:
             "r": [r.title() for r in c.get("races") or []], "x": V._text(c),
             "e": c.get("eid"), "p": c.get("price"),
             "at": [{"n": a.get("name", "?"), "x": V._text(a), "g": a.get("kind") == "dark_gift"}
-                  for a in c.get("attached") or []]}
+                  for a in c.get("attached") or []],
+            # what the card's frame shows: locked / held / temporary / unplayable, Activate
+            # used this turn, a price paid in Health
+            "f": [f for f, on in (
+                ("held", c.get("held")),
+                (f"locked {c.get('locked')} turn{'s' if (c.get('locked') or 0) > 1 else ''}",
+                 c.get("locked") and not c.get("held")),
+                ("temporary", c.get("temporary")), ("cannot be played", c.get("unplayable")),
+                ("Activate used", c.get("activations")),
+                ("costs Health", c.get("costs_health"))) if on]}
 
 
 def _reply(info: dict) -> dict:

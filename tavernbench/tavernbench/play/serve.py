@@ -300,6 +300,8 @@ class Lobby:
                         "pending": pending, "cancellable": me.get("cancellable"),
                         "dark_gift": (me.get("dark_gift") or {}).get("available")}},
                 "legal": [{"a": a, "label": A.describe(a, full)} for a in legal],
+                # the exact text an AI player gets for this seat (same function, same view)
+                "state_text": V.render(V.public_view(g, p), V.own_combats(g, p, detail=True)),
                 "lobby": opps, "combats": combats, "over": g.is_over(),
                 "history_last": len(self.history) - 1,
                 "placements": list(g.placements()) if g.is_over() else None,

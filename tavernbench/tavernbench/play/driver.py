@@ -174,7 +174,7 @@ def _ids(me: dict) -> tuple[set, set]:
 class Match:
     def __init__(self, agent, seed: int, seat: int = 0, config: dict | None = None,
                  turn_cap: int = 40, retries: int = 2, max_plan: int = 10, trace=None,
-                 record_combats=False, end_guard=True, plans="snapshot"):
+                 record_combats=False, end_guard=True, plans="snapshot", on_step=None):
         self.agent, self.seed, self.seat = agent, seed, seat
         self.config_json = json.dumps(config) if config else None
         self.turn_cap, self.retries, self.max_plan = turn_cap, retries, max_plan
@@ -192,6 +192,9 @@ class Match:
         # wrote it; "sequential" (runs before this option): later indices are read in the
         # state after the earlier actions.
         self.plans = plans
+        # Called after every action of the seat: on_step(game, action, description, source)
+        # with source "agent", "bot" (a fallback) or "forced" (the turn cap ended the turn).
+        self.on_step = on_step
         self.combats: list[dict] = []  # the agent's combats with replay frames (if recorded)
         self.game = None
 
@@ -244,9 +247,17 @@ class Match:
             if not plan.actions and "error" in plan.info:
                 break
         a = self._fallback(g)  # the agent failed to give a legal first action
-        turn_log.append(f"(bot) {A.describe(a, V.public_view(g, self.seat))}")
-        g.step(self.seat, a)
+        desc = A.describe(a, V.public_view(g, self.seat))
+        turn_log.append(f"(bot) {desc}")
+        self._step(g, a, desc, "bot")
         self.stats["actions"] += 1
+
+    def _step(self, g, a: int, desc: str, source: str):
+        if self.on_step is not None:
+            self.on_step(g, a, desc, source, before=True)
+        g.step(self.seat, a)
+        if self.on_step is not None:
+            self.on_step(g, a, desc, source, before=False)
 
     def _execute(self, g, plan: list[int], turn_log: list[str]) -> tuple[int, str]:
         """Execute `plan`; returns (actions executed, why it stopped)."""
@@ -284,7 +295,7 @@ class Match:
                         "end the turn anyway")
             hand0, shop0 = _ids(me)
             desc = A.describe(a, v)
-            g.step(self.seat, a)
+            self._step(g, a, desc, "agent")
             self.stats["actions"] += 1
             done += 1
             turn_log.append(desc)
@@ -332,7 +343,8 @@ class Match:
             if self.stats["actions"] - turn_actions >= self.turn_cap:
                 self.stats["forced_ends"] += 1
                 legal = A.legal(g, self.seat)
-                g.step(self.seat, A.END if A.END in legal else self._fallback(g))
+                a = A.END if A.END in legal else self._fallback(g)
+                self._step(g, a, A.describe(a, V.public_view(g, self.seat)), "forced")
                 continue
             self._agent_turn(g, turn_log, notes)
         if self.record_combats:

@@ -15,6 +15,7 @@ import json
 import re
 from pathlib import Path
 
+from . import actions as A
 from . import view as V
 from .driver import Match, Plan
 
@@ -32,6 +33,8 @@ def slim(c: dict) -> dict:
                   if k != "MAGNETIC"],
             "r": [r.title() for r in c.get("races") or []], "x": V._text(c),
             "e": c.get("eid"), "p": c.get("price"),
+            "id": c.get("sid") if c.get("sid") is not None else (
+                c.get("hid") if c.get("hid") is not None else c.get("eid")),
             "at": [{"n": a.get("name", "?"), "x": V._text(a), "g": a.get("kind") == "dark_gift"}
                   for a in c.get("attached") or []],
             # what the card's frame shows: locked / held / temporary / unplayable, Activate
@@ -57,6 +60,17 @@ def _reply(info: dict) -> dict:
     return {"reasoning": text.strip()[:600], "notes": "", "unparsed": bool(text.strip())}
 
 
+def snap_me(me: dict) -> dict:
+    """The seat's own visible state, as the page draws it."""
+    return {"hero": (me.get("hero") or {}).get("name"), "health": me["health"],
+            "armor": me["armor"], "tier": me["tier"], "gold": me["gold"],
+            "max_gold": me["max_gold"], "frozen": bool(me.get("frozen")),
+            "board": [slim(c) for c in me["board"]], "hand": [slim(c) for c in me["hand"]],
+            "shop": [slim(c) for c in me["shop"]],
+            "pending": V.pending_options(me) if me.get("pending") else [],
+            "pending_kind": (me.get("pending") or {}).get("kind")}
+
+
 class ReplayAgent:
     """Returns the recorded plans in order and keeps a snapshot of every decision."""
 
@@ -71,13 +85,7 @@ class ReplayAgent:
         me = d.view["me"]
         self.snaps.append({
             "turn": d.view["turn"], "phase": d.view["phase"], "state": d.state_text,
-            "feedback": d.feedback,
-            "me": {"hero": (me.get("hero") or {}).get("name"), "health": me["health"],
-                   "armor": me["armor"], "tier": me["tier"], "gold": me["gold"],
-                   "max_gold": me["max_gold"], "board": [slim(c) for c in me["board"]],
-                   "hand": [slim(c) for c in me["hand"]], "shop": [slim(c) for c in me["shop"]],
-                   "pending": V.pending_options(me) if me.get("pending") else [],
-                   "pending_kind": (me.get("pending") or {}).get("kind")},
+            "feedback": d.feedback, "me": snap_me(me),
             "lobby": [{"id": o["id"], "hero": (o.get("hero") or {}).get("name"),
                        "health": o["health"], "armor": o["armor"], "tier": o["tier"],
                        "alive": o["alive"], "next": o.get("is_next_opponent")}
@@ -105,10 +113,28 @@ def rebuild(run: Path, seed: int) -> dict:
     guard = st.get("end_guard", False)
     if guard is True and "plans" not in st:  # recorded before the check asked again
         guard = "once"
-    replayed = []
-    m = Match(agent, seed, row.get("seat", 0), st.get("config"), st.get("turn_cap", 40),
+    replayed, steps, seat = [], [], row.get("seat", 0)
+    last = {}
+
+    def on_step(g, a, desc, source, before):
+        """Every action of the seat with the state it leads to. Ending the turn may start the
+        combat and the next turn at once: that step keeps the warband it ended with."""
+        if before:
+            last["v"] = V.public_view(g, seat)
+            return
+        v0 = last["v"]
+        if v0["phase"] != "recruit":
+            return
+        after = v0 if a == A.END else V.public_view(g, seat)
+        if a != A.END and after["turn"] != v0["turn"]:
+            after = v0
+        steps.append({"turn": v0["turn"], "decision": len(agent.snaps) - 1, "action": desc,
+                      "source": source, "me": snap_me(after["me"])})
+
+    m = Match(agent, seed, seat, st.get("config"), st.get("turn_cap", 40),
               st.get("retries", 2), st.get("max_plan", 10), replayed.append,
-              record_combats=True, end_guard=guard, plans=st.get("plans", "sequential"))
+              record_combats=True, end_guard=guard, plans=st.get("plans", "sequential"),
+              on_step=on_step)
     out = m.play()
     keys = ("placement", "actions", "illegal", "fallbacks", "health", "turns")
     verified = all(out.get(k) == row.get(k) for k in keys if k in row) \
@@ -128,7 +154,6 @@ def rebuild(run: Path, seed: int) -> dict:
                           "prompt": info.get("prompt") or "", "response": info.get("response")
                           or "", "thinking": info.get("thinking") or "",
                           "told": orig.get("feedback") or snap.get("feedback") or ""})
-    seat = row.get("seat", 0)
     combats = []
     for c in m.combats:
         side = 0 if c["a"] == seat else 1
@@ -147,7 +172,7 @@ def rebuild(run: Path, seed: int) -> dict:
         "seed", "seat", "placement", "turns", "decisions", "actions", "illegal", "fallbacks",
         "cost_usd", "input_tokens", "output_tokens", "seconds", "agent", "model")},
         "verified": verified, "replayed": {k: out.get(k) for k in keys}},
-        "heroes": heroes, "decisions": decisions, "combats": combats}
+        "heroes": heroes, "decisions": decisions, "combats": combats, "steps": steps}
 
 
 def write_html(data: dict, path: Path):

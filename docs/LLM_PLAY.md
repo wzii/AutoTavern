@@ -123,7 +123,8 @@ A game is determined by its seed and the agent's plans, so the replay plays the 
 again (no model is called), checks the result against the original game, and writes one
 self-contained page. It shows every turn: the state at each decision (Tavern, warband, hand,
 pending choice, lobby), the model's reasoning, raw reply, thinking and tool calls, the actions
-executed, and each combat step by step.
+executed, the recruit phase one action at a time (what each refresh, Discover or effect
+brought is outlined), and each combat step by step.
 
 ## Playing against the models
 

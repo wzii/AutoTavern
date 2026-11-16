@@ -84,6 +84,13 @@ main { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px
 .card.spell { background: var(--spell); border-style: dashed; }
 .card.atk { box-shadow: 0 0 0 3px var(--atk); transform: translateY(-4px); }
 .card.def { box-shadow: 0 0 0 3px var(--def); }
+.card.fresh { box-shadow: 0 0 0 3px var(--win); }
+.rcap { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: 2px 0 6px; }
+.rcap .act { font-weight: 650; }
+.rcap .src { font-size: 11px; color: var(--loss); }
+.rwhy { color: var(--muted); font-style: italic; margin-bottom: 6px; min-height: 1.4em; }
+.rstats { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); }
+.rstats b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .card .tier { font-size: 10px; color: var(--muted); }
 .card .nm { font-size: 12px; font-weight: 600; line-height: 1.2; display: -webkit-box;
   -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -143,6 +150,7 @@ pre { white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo
   </section>
   <div class="right">
     <section class="panel" id="state"></section>
+    <section class="panel" id="recruit"></section>
     <section class="panel" id="combat"></section>
   </div>
 </main>
@@ -177,6 +185,7 @@ function card(c, hl) {
   if (c.k.includes("Divine Shield")) cls.push("ds");
   if (hl && hl.atk.has(c.e)) cls.push("atk");
   if (hl && hl.def.has(c.e)) cls.push("def");
+  if (hl && hl.fresh && hl.fresh.has(c.id)) cls.push("fresh");
   const kws = c.k.filter((k) => k !== "Taunt" && k !== "Divine Shield");
   const att = c.at || [], gifts = att.filter((x) => x.g);
   const tip = `${c.g ? "Golden " : ""}${c.n}${c.s ? "" : ` (${c.r.join("/") || "no tribe"}, tier ${c.t}) ${c.a}/${c.h}`}${c.k.length ? " [" + c.k.join(", ") + "]" : ""}${c.x ? "\n" + c.x : ""}`
@@ -219,7 +228,11 @@ function renderDecisions() {
       <span>${d.latency != null ? d.latency + "s" : ""}${d.cost ? " · $" + d.cost.toFixed(3) : ""}</span></div>
       ${did}${d.reasoning ? `<div class="why">“${esc(d.reasoning)}”</div>` : ""}${tags.join("")}</div>`;
   }).join("");
-  document.querySelectorAll(".dec").forEach((el) => el.onclick = () => { curDec = +el.dataset.i; renderDecisions(); renderState(); });
+  document.querySelectorAll(".dec").forEach((el) => el.onclick = () => {
+    curDec = +el.dataset.i; renderDecisions(); renderState();
+    const fr = recruitFrames(curTurn), k = fr.findIndex((f) => f.decision === curDec);
+    if (k >= 0) setRStep(Math.max(0, k - 1));
+  });
 }
 
 function renderState() {
@@ -280,9 +293,61 @@ function play() { const c = combatOf(curTurn); if (!c) return; if (frame >= c.fr
   $("#play").textContent = "Pause"; timer = setInterval(() => setFrame(frame + 1), 900); }
 function stop() { if (timer) clearInterval(timer); timer = null; const b = $("#play"); if (b) b.textContent = "Play"; }
 
+// ---- the recruit phase, one action at a time
+const STEPS = DATA.steps || [];
+let rstep = 0, rtimer = null;
+function recruitFrames(t) {
+  const start = D.find((d) => d.turn === t && d.phase === "recruit");
+  if (!start) return [];
+  return [{action: "Start of the turn", me: start.me, decision: null, source: "start"},
+          ...STEPS.filter((s) => s.turn === t)];
+}
+function renderRecruit() {
+  stopR();
+  const el = $("#recruit"), fr = recruitFrames(curTurn);
+  if (!STEPS.length || fr.length < 2) { el.innerHTML = `<h2>Recruit, step by step</h2><div class="nocombat">${STEPS.length ? "No actions this turn." : "This replay was built before step recording; rebuild it to see each action."}</div>`; return; }
+  el.innerHTML = `<h2>Recruit, step by step</h2>
+    <div class="rcap"><span class="act" id="ract"></span><span class="src" id="rsrc"></span></div>
+    <div class="rwhy" id="rwhy"></div><div class="rstats" id="rstats"></div>
+    <div class="side">Tavern</div><div id="rshop"></div>
+    <div class="side">Warband</div><div id="rboard"></div>
+    <div class="side">Hand</div><div id="rhand"></div><div id="rpend"></div>
+    <div class="controls"><button id="rfirst" title="Start of the turn">⏮</button><button id="rprev" title="Previous action">◀</button>
+    <button id="rplay">Play</button><button id="rnext" title="Next action">▶</button><button id="rlast" title="End of the turn">⏭</button>
+    <input type="range" id="rslider" min="0" max="${fr.length - 1}" value="0"><span class="fr" id="rfr"></span></div>`;
+  $("#rfirst").onclick = () => setRStep(0); $("#rlast").onclick = () => setRStep(fr.length - 1);
+  $("#rprev").onclick = () => setRStep(rstep - 1); $("#rnext").onclick = () => setRStep(rstep + 1);
+  $("#rslider").oninput = (e) => setRStep(+e.target.value);
+  $("#rplay").onclick = () => rtimer ? stopR() : playR();
+  setRStep(0);
+}
+function setRStep(k) {
+  const fr = recruitFrames(curTurn); if (!fr.length || !$("#rslider")) return;
+  rstep = Math.max(0, Math.min(fr.length - 1, k));
+  const f = fr[rstep], prev = rstep ? fr[rstep - 1] : null, m = f.me;
+  // cards that were not there one step before: what a refresh, a Discover or an effect brought
+  const ids = (me) => new Set(["shop", "hand", "board"].flatMap((z) => me[z].map((c) => c.id)));
+  const before = prev ? ids(prev.me) : new Set();
+  const hl = {atk: new Set(), def: new Set(), fresh: prev ? new Set([...ids(m)].filter((x) => !before.has(x))) : new Set()};
+  $("#ract").textContent = rstep ? `${rstep}. ${f.action}` : f.action;
+  $("#rsrc").textContent = f.source === "bot" ? "(the bot acted: no legal reply)" : f.source === "forced" ? "(turn ended by the action cap)" : "";
+  const d = f.decision != null ? D[f.decision] : null;
+  const first = d && (!prev || prev.decision !== f.decision);
+  $("#rwhy").textContent = first && d.reasoning ? `“${d.reasoning}”` : "";
+  $("#rstats").innerHTML = `<span>Gold <b>${m.gold}/${m.max_gold}</b></span><span>Tier <b>${m.tier}</b></span>
+    <span>Health <b>${m.health}${m.armor ? "+" + m.armor : ""}</b></span>${m.frozen ? "<span>Tavern frozen</span>" : ""}`;
+  $("#rshop").innerHTML = row(m.shop, hl); $("#rboard").innerHTML = row(m.board, hl); $("#rhand").innerHTML = row(m.hand, hl);
+  $("#rpend").innerHTML = m.pending && m.pending.length ? `<div class="pending"><b>Choice (${esc(m.pending_kind)})</b><ol start="0">${m.pending.map((p) => `<li>${esc(p)}</li>`).join("")}</ol></div>` : "";
+  $("#rslider").value = rstep; $("#rfr").textContent = `${rstep}/${fr.length - 1}`;
+  if (rstep === fr.length - 1) stopR();
+}
+function playR() { const fr = recruitFrames(curTurn); if (rstep >= fr.length - 1) setRStep(0);
+  $("#rplay").textContent = "Pause"; rtimer = setInterval(() => setRStep(rstep + 1), 1100); }
+function stopR() { if (rtimer) clearInterval(rtimer); rtimer = null; const b = $("#rplay"); if (b) b.textContent = "Play"; }
+
 function selectTurn(t) {
   curTurn = t; curDec = D.findIndex((d) => d.turn === t);
-  renderTurns(); renderDecisions(); renderState(); renderCombat();
+  renderTurns(); renderDecisions(); renderState(); renderRecruit(); renderCombat();
 }
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
